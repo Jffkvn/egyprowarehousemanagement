@@ -370,3 +370,27 @@ BEGIN
   RETURN v_company_id;
 END;
 $$ LANGUAGE plpgsql;
+
+-- 6. NOTIFICATIONS SCHEMA
+CREATE TABLE notifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  message TEXT NOT NULL,
+  link TEXT NOT NULL,
+  is_read BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY notifications_select ON notifications
+  FOR SELECT USING (company_id = get_current_user_company() AND user_id = auth.uid());
+
+CREATE POLICY notifications_update ON notifications
+  FOR UPDATE USING (company_id = get_current_user_company() AND user_id = auth.uid());
+
+CREATE POLICY notifications_insert ON notifications
+  FOR INSERT WITH CHECK (company_id = get_current_user_company());
+

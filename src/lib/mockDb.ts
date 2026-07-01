@@ -131,6 +131,17 @@ export interface ProcurementRequest {
   created_by_name?: string;
 }
 
+export interface Notification {
+  id: string;
+  company_id: string;
+  user_id: string;
+  title: string;
+  message: string;
+  link: string;
+  is_read: boolean;
+  created_at: string;
+}
+
 // Initial Mock Seed Data
 const MOCK_COMPANY_ID = 'c1c1c1c1-1111-1111-1111-111111111111';
 const MOCK_USERS: User[] = [
@@ -332,7 +343,9 @@ function getDbState() {
 
   const stored = localStorage.getItem('equip_track_mock_db');
   if (stored) {
-    return JSON.parse(stored);
+    const parsed = JSON.parse(stored);
+    if (!parsed.notifications) parsed.notifications = [];
+    return parsed;
   }
 
   // Seed initial
@@ -346,6 +359,7 @@ function getDbState() {
     requests: MOCK_REQUESTS,
     requestItems: MOCK_REQUEST_ITEMS,
     procurements: MOCK_PROCUREMENTS,
+    notifications: [] as Notification[],
     sequences: {
       'cat11111-1111-1111-1111-111111111111': 2,
       'cat22222-2222-2222-2222-222222222222': 2,
@@ -656,6 +670,27 @@ export const mockDb = {
     state.requests.push(newRequest);
     state.requestItems.push(...requestItemsToSave);
 
+    // Notify WMs or CFO depending on routing
+    const targetRole = routesToCfo ? 'cfo' : 'warehouse_manager';
+    const pmUser = state.users.find((u: User) => u.id === request.requested_by);
+    const pmName = pmUser ? pmUser.full_name : 'A Project Manager';
+    
+    // Find matching recipients
+    const recipients = state.users.filter((u: User) => u.role === targetRole);
+    if (!state.notifications) state.notifications = [];
+    recipients.forEach((u: User) => {
+      state.notifications.push({
+        id: 'nt_' + Math.random().toString(36).substr(2, 9),
+        company_id: MOCK_COMPANY_ID,
+        user_id: u.id,
+        title: 'New Request Pending',
+        message: `${pmName} submitted a request for project "${request.project_name}".`,
+        link: `/requests/${requestId}`,
+        is_read: false,
+        created_at: new Date().toISOString()
+      });
+    });
+
     saveDbState(state);
     return newRequest;
   },
@@ -668,6 +703,19 @@ export const mockDb = {
     req.status = 'approved';
     req.approved_by = approverId;
     req.approved_at = new Date().toISOString();
+
+    // Notify PM
+    if (!state.notifications) state.notifications = [];
+    state.notifications.push({
+      id: 'nt_' + Math.random().toString(36).substr(2, 9),
+      company_id: MOCK_COMPANY_ID,
+      user_id: req.requested_by,
+      title: 'Request Approved',
+      message: `Your equipment request for project "${req.project_name}" has been approved.`,
+      link: `/requests/${req.id}`,
+      is_read: false,
+      created_at: new Date().toISOString()
+    });
 
     saveDbState(state);
     return req;
@@ -682,6 +730,19 @@ export const mockDb = {
     req.approved_by = approverId;
     req.approved_at = new Date().toISOString();
     req.rejection_reason = reason;
+
+    // Notify PM
+    if (!state.notifications) state.notifications = [];
+    state.notifications.push({
+      id: 'nt_' + Math.random().toString(36).substr(2, 9),
+      company_id: MOCK_COMPANY_ID,
+      user_id: req.requested_by,
+      title: 'Request Rejected',
+      message: `Your request for project "${req.project_name}" was rejected. Reason: ${reason}`,
+      link: `/requests/${req.id}`,
+      is_read: false,
+      created_at: new Date().toISOString()
+    });
 
     saveDbState(state);
     return req;
@@ -742,6 +803,20 @@ export const mockDb = {
     }
 
     req.status = 'fulfilled';
+
+    // Notify PM
+    if (!state.notifications) state.notifications = [];
+    state.notifications.push({
+      id: 'nt_' + Math.random().toString(36).substr(2, 9),
+      company_id: MOCK_COMPANY_ID,
+      user_id: req.requested_by,
+      title: 'Equipment Dispatched',
+      message: `Your requested items for project "${req.project_name}" have been checked out.`,
+      link: `/requests/${req.id}`,
+      is_read: false,
+      created_at: new Date().toISOString()
+    });
+
     saveDbState(state);
     return req;
   },
@@ -799,6 +874,36 @@ export const mockDb = {
 
     if (stillCheckedOutCount === 0) {
       req.status = 'returned';
+    }
+
+    // Notify PM
+    if (!state.notifications) state.notifications = [];
+    state.notifications.push({
+      id: 'nt_' + Math.random().toString(36).substr(2, 9),
+      company_id: MOCK_COMPANY_ID,
+      user_id: req.requested_by,
+      title: 'Equipment Returned',
+      message: `"${eq.name}" has been marked as returned (${condition}).`,
+      link: `/requests/${req.id}`,
+      is_read: false,
+      created_at: new Date().toISOString()
+    });
+
+    // Notify CFO if damaged
+    if (condition !== 'good') {
+      const cfoUsers = state.users.filter((u: User) => u.role === 'cfo');
+      cfoUsers.forEach((u: User) => {
+        state.notifications.push({
+          id: 'nt_' + Math.random().toString(36).substr(2, 9),
+          company_id: MOCK_COMPANY_ID,
+          user_id: u.id,
+          title: 'Damaged Asset Alert',
+          message: `"${eq.name}" (${eq.asset_code}) was returned damaged for project "${req.project_name}".`,
+          link: `/requests/${req.id}`,
+          is_read: false,
+          created_at: new Date().toISOString()
+        });
+      });
     }
 
     saveDbState(state);
@@ -974,6 +1079,20 @@ export const mockDb = {
       }
     }
 
+    // Notify CFO (creator of procurement request)
+    if (!state.notifications) state.notifications = [];
+    const statusText = status === 'received' ? 'arrived and marked received' : 'ordered';
+    state.notifications.push({
+      id: 'nt_' + Math.random().toString(36).substr(2, 9),
+      company_id: MOCK_COMPANY_ID,
+      user_id: pr.created_by,
+      title: `Procurement Order ${status === 'received' ? 'Received' : 'Placed'}`,
+      message: `Your procurement request for "${pr.description}" has been ${statusText}.`,
+      link: '/procurement',
+      is_read: false,
+      created_at: new Date().toISOString()
+    });
+
     saveDbState(state);
     return pr;
   },
@@ -1017,6 +1136,50 @@ export const mockDb = {
         con.unit_value_ugx = newValue;
       }
     }
+    saveDbState(state);
+  },
+
+  getNotifications: async (userId: string): Promise<Notification[]> => {
+    const state = getDbState();
+    return (state.notifications || [])
+      .filter((n: Notification) => n.user_id === userId)
+      .sort((a: Notification, b: Notification) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  },
+
+  createNotification: async (companyId: string, userId: string, title: string, message: string, link: string): Promise<Notification> => {
+    const state = getDbState();
+    if (!state.notifications) state.notifications = [];
+    const newNotif: Notification = {
+      id: 'nt_' + Math.random().toString(36).substr(2, 9),
+      company_id: companyId,
+      user_id: userId,
+      title,
+      message,
+      link,
+      is_read: false,
+      created_at: new Date().toISOString()
+    };
+    state.notifications.push(newNotif);
+    saveDbState(state);
+    return newNotif;
+  },
+
+  markNotificationAsRead: async (id: string): Promise<void> => {
+    const state = getDbState();
+    const notif = (state.notifications || []).find((n: Notification) => n.id === id);
+    if (notif) {
+      notif.is_read = true;
+      saveDbState(state);
+    }
+  },
+
+  markAllNotificationsAsRead: async (userId: string): Promise<void> => {
+    const state = getDbState();
+    (state.notifications || []).forEach((n: Notification) => {
+      if (n.user_id === userId) {
+        n.is_read = true;
+      }
+    });
     saveDbState(state);
   }
 };

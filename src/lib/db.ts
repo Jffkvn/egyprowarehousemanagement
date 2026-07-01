@@ -2,9 +2,9 @@
 // Delegates queries to Supabase if configured, or falls back to Mock LocalStorage.
 
 import { supabase } from './supabaseClient';
-import { mockDb, User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem } from './mockDb';
+import { mockDb, User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification } from './mockDb';
 
-export type { User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem };
+export type { User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification };
 
 // Helper to determine if we should use Supabase or fallback to mock
 const useSupabase = () => {
@@ -989,6 +989,56 @@ export const db = {
     } catch (e) {
       console.warn('Supabase updateItemValue failed, using mock database:', e);
       return mockDb.updateItemValue(id, type, newValue);
+    }
+  },
+
+  getNotifications: async (userId: string): Promise<Notification[]> => {
+    if (!useSupabase()) {
+      return mockDb.getNotifications(userId);
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('notifications')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      return data as Notification[];
+    } catch (e) {
+      console.warn('Supabase getNotifications failed, using mock database:', e);
+      return mockDb.getNotifications(userId);
+    }
+  },
+
+  markNotificationAsRead: async (id: string): Promise<void> => {
+    if (!useSupabase()) {
+      return mockDb.markNotificationAsRead(id);
+    }
+    try {
+      const { error } = await supabase!
+        .from('notifications')
+        .update({ is_read: true })
+        .eq('id', id);
+      if (error) throw error;
+    } catch (e) {
+      console.warn('Supabase markNotificationAsRead failed, using mock database:', e);
+      return mockDb.markNotificationAsRead(id);
+    }
+  },
+
+  markAllNotificationsAsRead: async (userId: string): Promise<void> => {
+    if (!useSupabase()) {
+      return mockDb.markAllNotificationsAsRead(userId);
+    }
+    try {
+      const { error } = await supabase!
+        .from('notifications')
+        .update({ is_read: true })
+        .eq('user_id', userId);
+      if (error) throw error;
+    } catch (e) {
+      console.warn('Supabase markAllNotificationsAsRead failed, using mock database:', e);
+      return mockDb.markAllNotificationsAsRead(userId);
     }
   }
 };

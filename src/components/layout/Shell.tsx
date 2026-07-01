@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
+import { db, Notification } from '@/lib/db';
 import { 
   LayoutDashboard, 
   Package, 
@@ -17,7 +18,8 @@ import {
   ChevronLeft, 
   ChevronRight,
   TrendingUp,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Bell
 } from 'lucide-react';
 
 interface ShellProps {
@@ -30,6 +32,50 @@ export default function Shell({ children }: ShellProps) {
   const router = useRouter();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  // Notifications state
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [notifOpen, setNotifOpen] = useState(false);
+
+  const fetchNotifications = async () => {
+    if (!user) return;
+    try {
+      const list = await db.getNotifications(user.id);
+      setNotifications(list);
+    } catch (err) {
+      console.error('Error loading notifications:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (!user) return;
+    fetchNotifications();
+    const interval = setInterval(fetchNotifications, 12000);
+    return () => clearInterval(interval);
+  }, [user?.id]);
+
+  const unreadCount = notifications.filter(n => !n.is_read).length;
+
+  const handleMarkAllRead = async () => {
+    if (!user) return;
+    try {
+      await db.markAllNotificationsAsRead(user.id);
+      fetchNotifications();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleNotifClick = async (notif: Notification) => {
+    try {
+      await db.markNotificationAsRead(notif.id);
+      setNotifOpen(false);
+      fetchNotifications();
+      router.push(notif.link);
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   if (!user) return <>{children}</>;
 
@@ -193,6 +239,69 @@ export default function Shell({ children }: ShellProps) {
 
           {/* User Details */}
           <div className="flex items-center space-x-4">
+            {/* Notification Bell */}
+            <div className="relative">
+              <button
+                onClick={() => setNotifOpen(!notifOpen)}
+                className="p-1.5 rounded-full hover:bg-background text-text-muted hover:text-navy transition-colors relative focus:outline-none"
+                title="Notifications"
+              >
+                <Bell size={20} />
+                {unreadCount > 0 && (
+                  <span className="absolute top-0 right-0 w-4 h-4 bg-danger text-white text-[9px] font-bold rounded-full flex items-center justify-center border border-white">
+                    {unreadCount}
+                  </span>
+                )}
+              </button>
+
+              {notifOpen && (
+                <>
+                  <div 
+                    className="fixed inset-0 z-40" 
+                    onClick={() => setNotifOpen(false)}
+                  />
+                  <div className="absolute right-0 mt-2 w-80 bg-surface border border-border rounded-lg shadow-lg z-50 overflow-hidden text-sm">
+                    <div className="p-3 border-b border-border flex justify-between items-center bg-background/25">
+                      <span className="font-bold text-navy text-xs">Notifications</span>
+                      {unreadCount > 0 && (
+                        <button
+                          onClick={handleMarkAllRead}
+                          className="text-[10px] text-primary hover:text-primary/80 font-semibold"
+                        >
+                          Mark all as read
+                        </button>
+                      )}
+                    </div>
+                    <div className="max-h-72 overflow-y-auto divide-y divide-border">
+                      {notifications.length === 0 ? (
+                        <div className="p-4 text-center text-xs text-text-muted italic">
+                          No notifications
+                        </div>
+                      ) : (
+                        notifications.map((n) => (
+                          <div
+                            key={n.id}
+                            onClick={() => handleNotifClick(n)}
+                            className={`p-3 cursor-pointer transition-colors text-xs space-y-1 hover:bg-background/40
+                              ${!n.is_read ? 'bg-primary/5 border-l-2 border-primary' : 'pl-3.5'}
+                            `}
+                          >
+                            <div className="flex justify-between items-start">
+                              <span className="font-bold text-navy leading-tight">{n.title}</span>
+                              <span className="text-[9px] text-text-muted shrink-0 ml-2">
+                                {new Date(n.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            </div>
+                            <p className="text-text-muted leading-snug">{n.message}</p>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
             <div className="hidden sm:flex flex-col text-right">
               <span className="text-sm font-semibold text-text">{user.full_name}</span>
               <span className="text-xs text-text-muted">{user.email}</span>
