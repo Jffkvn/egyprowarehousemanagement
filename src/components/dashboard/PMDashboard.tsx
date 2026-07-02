@@ -2,9 +2,9 @@
 
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { db, Request } from '@/lib/db';
+import { db, Request, CashAdvance } from '@/lib/db';
 import Link from 'next/link';
-import { PlusCircle, Search, Calendar, MapPin, Eye, Package } from 'lucide-react';
+import { PlusCircle, Search, Calendar, MapPin, Eye, Package, Coins, Clock, AlertTriangle, ArrowRight } from 'lucide-react';
 
 export function StatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
@@ -54,17 +54,26 @@ export function StatusBadge({ status }: { status: string }) {
 export default function PMDashboard() {
   const { user } = useAuth();
   const [requests, setRequests] = useState<Request[]>([]);
+  const [advances, setAdvances] = useState<CashAdvance[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
 
   useEffect(() => {
-    const fetchRequests = async () => {
+    const fetchDashboardData = async () => {
       if (!user) return;
       try {
         const allRequests = await db.getRequests();
         // Filter PM's own requests
         const ownRequests = allRequests.filter(r => r.requested_by === user.id);
         setRequests(ownRequests);
+
+        // Fetch PM's own advances
+        try {
+          const ownAdvances = await db.getCashAdvances('pm', user.id);
+          setAdvances(ownAdvances);
+        } catch (e) {
+          console.warn('Failed to fetch PM advances in dashboard:', e);
+        }
       } catch (err) {
         console.error('Error fetching PM requests:', err);
       } finally {
@@ -72,13 +81,22 @@ export default function PMDashboard() {
       }
     };
 
-    fetchRequests();
+    fetchDashboardData();
   }, [user]);
 
   const filteredRequests = requests.filter(r => 
     r.project_name.toLowerCase().includes(search.toLowerCase()) ||
     (r.site_location && r.site_location.toLowerCase().includes(search.toLowerCase()))
   );
+
+  const formatCurrency = (val: number) => {
+    return new Intl.NumberFormat('en-UG', { style: 'currency', currency: 'UGX', maximumFractionDigits: 0 }).format(val);
+  };
+
+  // Compute PM Cash Metrics
+  const pmOutstandingBalance = advances.reduce((sum, a) => sum + (a.outstanding_ugx || 0), 0);
+  const pmOverdueCount = advances.filter(a => a.status === 'overdue').length;
+  const pmPendingCount = advances.filter(a => a.status === 'pending').length;
 
   if (loading) {
     return (
@@ -89,136 +107,173 @@ export default function PMDashboard() {
   }
 
   return (
-    <div className="space-y-6">
-      {/* Dashboard Action Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-bold text-navy">My Equipment Requests</h2>
-          <p className="text-sm text-text-muted">Track logistics requests for your project sites</p>
-        </div>
-        <Link 
-          href="/requests/new"
-          className="inline-flex items-center justify-center space-x-2 bg-primary hover:bg-primary/95 text-white font-semibold text-sm rounded-md px-4 h-10 transition-colors"
-        >
-          <PlusCircle size={16} />
-          <span>Request Equipment</span>
-        </Link>
+    <div className="space-y-8">
+      {/* PM Welcome Header */}
+      <div>
+        <h2 className="text-xl font-bold text-navy">Project Manager Dashboard</h2>
+        <p className="text-sm text-text-muted">Manage field operations, logistics requests, and project cash accountabilities</p>
       </div>
 
-      {requests.length === 0 ? (
-        /* Empty State */
-        <div className="bg-surface border border-border rounded-lg p-12 text-center flex flex-col items-center">
-          <Package className="w-12 h-12 text-text-muted mb-4" />
-          <h3 className="text-base font-semibold text-navy mb-1">No equipment requests yet</h3>
-          <p className="text-sm text-text-muted mb-6 max-w-sm">
-            Submit your first request to reserve reusable tools or consumable stock for your active ATC project.
-          </p>
+      {/* Cash Advances Overview Row */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xs font-bold text-navy uppercase tracking-wider">My Petty Cash Accountability</h3>
+          <Link href="/advances" className="text-xs text-primary font-semibold hover:underline flex items-center gap-1">
+            Open cash console <ArrowRight size={12} />
+          </Link>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {/* Outstanding Box */}
+          <div className="p-4 bg-surface border border-border rounded-lg shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold text-text-muted">My Outstanding Balance</span>
+              <Coins className="w-5 h-5 text-warning" />
+            </div>
+            <p className="text-lg font-bold text-navy">{formatCurrency(pmOutstandingBalance)}</p>
+            <p className="text-[10px] text-text-muted mt-1">Awaiting spent receipts &amp; retirement</p>
+          </div>
+
+          {/* Pending Review Box */}
+          <div className="p-4 bg-surface border border-border rounded-lg shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold text-text-muted">Pending CFO Approvals</span>
+              <Clock className="w-5 h-5 text-primary" />
+            </div>
+            <p className="text-lg font-bold text-navy">{pmPendingCount}</p>
+            <p className="text-[10px] text-text-muted mt-1">Requests currently in CFO queue</p>
+          </div>
+
+          {/* Overdue Reports Box */}
+          <div className="p-4 bg-surface border border-border rounded-lg shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold text-text-muted">Overdue Accountability Reports</span>
+              <AlertTriangle className="w-5 h-5 text-danger" />
+            </div>
+            <p className={`text-lg font-bold ${pmOverdueCount > 0 ? 'text-danger' : 'text-navy'}`}>{pmOverdueCount}</p>
+            <p className="text-[10px] text-text-muted mt-1">Overdue items locking request actions</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Equipment Requests Header */}
+      <div className="space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <h3 className="text-xs font-bold text-navy uppercase tracking-wider">My Logistics &amp; Equipment Requisitions</h3>
           <Link 
             href="/requests/new"
             className="inline-flex items-center justify-center space-x-2 bg-primary hover:bg-primary/95 text-white font-semibold text-sm rounded-md px-4 h-10 transition-colors"
           >
             <PlusCircle size={16} />
-            <span>Create First Request</span>
+            <span>Request Equipment</span>
           </Link>
         </div>
-      ) : (
-        /* Requests Table */
-        <div className="bg-surface border border-border rounded-lg overflow-hidden shadow-sm">
-          <div className="p-4 border-b border-border flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div className="relative w-full max-w-xs">
-              <Search size={16} className="absolute left-3 top-2.5 text-text-muted" />
-              <input
-                type="text"
-                placeholder="Search requests..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="w-full h-9 pl-9 pr-3 border border-border rounded-md text-xs bg-background focus:outline-none focus:border-primary"
-              />
-            </div>
-            <span className="text-xs text-text-muted font-medium">
-              Showing {filteredRequests.length} of {requests.length} requests
-            </span>
-          </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-left">
-              <thead>
-                <tr className="bg-background text-text-muted text-xs font-semibold uppercase border-b border-border">
-                  <th className="px-6 py-3">Project Name & Site</th>
-                  <th className="px-6 py-3">Requested Items</th>
-                  <th className="px-6 py-3">Needed From</th>
-                  <th className="px-6 py-3">Needed Until</th>
-                  <th className="px-6 py-3">Status</th>
-                  <th className="px-6 py-3">Submitted</th>
-                  <th className="px-6 py-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border text-sm">
-                {filteredRequests.map((req) => {
-                  const itemsSummary = req.items?.map(it => `${it.name} (x${it.quantity_requested})`).join(', ') || 'No items';
-                  return (
-                    <tr key={req.id} className="hover:bg-background/50 transition-colors">
-                      <td className="px-6 py-4">
-                        <div className="font-semibold text-navy">{req.project_name}</div>
-                        {req.site_location && (
-                          <div className="text-xs text-text-muted flex items-center mt-0.5">
-                            <MapPin size={12} className="mr-1 flex-shrink-0" />
-                            <span>{req.site_location}</span>
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 max-w-xs truncate" title={itemsSummary}>
-                        {itemsSummary}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-xs text-text">
-                        <div className="flex items-center">
-                          <Calendar size={12} className="mr-1 text-text-muted" />
-                          {req.needed_from}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-xs text-text">
-                        {req.needed_until ? (
+        {requests.length === 0 ? (
+          /* Empty State */
+          <div className="bg-surface border border-border rounded-lg p-12 text-center flex flex-col items-center">
+            <Package className="w-12 h-12 text-text-muted mb-4" />
+            <h3 className="text-base font-semibold text-navy mb-1">No equipment requests yet</h3>
+            <p className="text-sm text-text-muted mb-6 max-w-sm">
+              Submit your first request to reserve reusable tools or consumable stock for your active ATC project.
+            </p>
+            <Link 
+              href="/requests/new"
+              className="inline-flex items-center justify-center space-x-2 bg-primary hover:bg-primary/95 text-white font-semibold text-sm rounded-md px-4 h-10 transition-colors"
+            >
+              <PlusCircle size={16} />
+              <span>Create First Request</span>
+            </Link>
+          </div>
+        ) : (
+          /* Requests Table */
+          <div className="bg-surface border border-border rounded-lg overflow-hidden shadow-sm">
+            <div className="p-4 border-b border-border flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="relative w-full max-w-xs">
+                <Search size={16} className="absolute left-3 top-2.5 text-text-muted" />
+                <input
+                  type="text"
+                  placeholder="Search requests..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="w-full h-9 pl-9 pr-3 border border-border rounded-md text-xs bg-background focus:outline-none focus:border-primary"
+                />
+              </div>
+              <span className="text-xs text-text-muted font-medium">
+                Showing {filteredRequests.length} of {requests.length} requests
+              </span>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-left">
+                <thead>
+                  <tr className="bg-background text-text-muted text-xs font-semibold uppercase border-b border-border">
+                    <th className="px-6 py-3">Project Name &amp; Site</th>
+                    <th className="px-6 py-3">Requested Items</th>
+                    <th className="px-6 py-3">Needed From</th>
+                    <th className="px-6 py-3">Needed Until</th>
+                    <th className="px-6 py-3">Status</th>
+                    <th className="px-6 py-3">Submitted</th>
+                    <th className="px-6 py-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border text-sm">
+                  {filteredRequests.map((req) => {
+                    const itemsSummary = req.items?.map(it => `${it.name} (x${it.quantity_requested})`).join(', ') || 'No items';
+                    return (
+                      <tr key={req.id} className="hover:bg-background/50 transition-colors">
+                        <td className="px-6 py-4">
+                          <div className="font-semibold text-navy">{req.project_name}</div>
+                          {req.site_location && (
+                            <div className="text-xs text-text-muted flex items-center mt-0.5">
+                              <MapPin size={12} className="mr-1 flex-shrink-0" />
+                              <span>{req.site_location}</span>
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 max-w-xs truncate" title={itemsSummary}>
+                          {itemsSummary}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-xs text-text">
                           <div className="flex items-center">
                             <Calendar size={12} className="mr-1 text-text-muted" />
-                            {req.needed_until}
+                            {req.needed_from}
                           </div>
-                        ) : (
-                          <span className="text-text-muted text-xs">Consumables Only</span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <StatusBadge status={req.status} />
-                        {req.status === 'pending' && (
-                          <div className="text-[10px] text-text-muted mt-1 font-mono">
-                            Routed to: {req.routed_to === 'cfo' ? 'CFO' : 'Warehouse Mgr'}
-                          </div>
-                        )}
-                        {req.status === 'rejected' && req.rejection_reason && (
-                          <div className="text-[10px] text-danger max-w-[150px] truncate mt-1" title={req.rejection_reason}>
-                            Reason: {req.rejection_reason}
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-xs text-text-muted">
-                        {new Date(req.created_at).toLocaleDateString()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-xs">
-                        <Link 
-                          href={`/requests/${req.id}`}
-                          className="inline-flex items-center space-x-1.5 text-navy border border-navy/20 hover:bg-navy/5 rounded px-2.5 h-8 font-medium transition-colors"
-                        >
-                          <Eye size={12} />
-                          <span>View Details</span>
-                        </Link>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-xs text-text">
+                          {req.needed_until ? (
+                            <div className="flex items-center">
+                              <Calendar size={12} className="mr-1 text-text-muted" />
+                              {req.needed_until}
+                            </div>
+                          ) : (
+                            <span className="text-text-muted">— (Consumable)</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
+                          <StatusBadge status={req.status} />
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-xs text-text-muted">
+                          {new Date(req.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <Link 
+                            href={`/requests/${req.id}`}
+                            className="inline-flex items-center space-x-1 border border-border hover:bg-background rounded px-3 h-8 text-xs font-semibold text-navy transition-colors"
+                          >
+                            <span>Details</span>
+                            <Eye size={12} />
+                          </Link>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

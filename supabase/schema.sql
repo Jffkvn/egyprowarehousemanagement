@@ -1226,6 +1226,23 @@ BEGIN
   )
   RETURNING id INTO v_advance_id;
 
+  -- Send notifications to CFOs
+  INSERT INTO notifications (
+    company_id,
+    user_id,
+    title,
+    message,
+    link
+  )
+  SELECT 
+    v_company_id,
+    u.id,
+    'New Cash Advance Request',
+    (SELECT full_name FROM users WHERE id = auth.uid()) || ' requested a cash advance of ' || p_amount_requested_ugx::text || ' UGX for project "' || p_project_name || '".',
+    '/advances'
+  FROM users u
+  WHERE u.company_id = v_company_id AND u.role = 'cfo' AND u.is_active = true;
+
   RETURN v_advance_id;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;

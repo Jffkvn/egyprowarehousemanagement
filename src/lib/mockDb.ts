@@ -2061,12 +2061,31 @@ export const mockDb = {
 
     if (!state.cashAdvances) state.cashAdvances = [];
     state.cashAdvances.push(newAdv);
-    saveDbState(state);
 
     const pmUser = state.users.find((u: User) => u.id === advance.requested_by);
+    const pmName = pmUser ? pmUser.full_name : 'PM Operator';
+
+    // Notify CFOs
+    const cfos = state.users.filter((u: User) => u.role === 'cfo');
+    if (!state.notifications) state.notifications = [];
+    cfos.forEach((cfo: User) => {
+      state.notifications.push({
+        id: 'nt_' + Math.random().toString(36).substr(2, 9),
+        company_id: MOCK_COMPANY_ID,
+        user_id: cfo.id,
+        title: 'New Cash Advance Request',
+        message: `${pmName} requested a cash advance of ${advance.amount_requested_ugx} UGX for project "${advance.project_name}".`,
+        link: '/advances',
+        is_read: false,
+        created_at: new Date().toISOString()
+      });
+    });
+
+    saveDbState(state);
+
     return {
       ...newAdv,
-      requested_by_name: pmUser ? pmUser.full_name : 'PM Operator',
+      requested_by_name: pmName,
       amount_disbursed_ugx: 0,
       amount_retired_ugx: 0,
       outstanding_ugx: 0
