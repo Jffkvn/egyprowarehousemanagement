@@ -23,7 +23,8 @@ import {
   Check,
   Wrench,
   ClipboardList,
-  ScanLine
+  ScanLine,
+  Coins
 } from 'lucide-react';
 import ScannerOverlay from '../scanner/ScannerOverlay';
 
@@ -141,6 +142,12 @@ export default function Shell({ children }: ShellProps) {
       href: '/transactions',
       icon: History,
       roles: ['warehouse_manager', 'cfo']
+    },
+    {
+      name: 'Cash Advances',
+      href: '/advances',
+      icon: Coins,
+      roles: ['pm', 'cfo']
     },
     {
       name: 'Reports',

@@ -2,9 +2,9 @@
 // Delegates queries to Supabase if configured, or falls back to Mock LocalStorage.
 
 import { supabase } from './supabaseClient';
-import { mockDb, User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport } from './mockDb';
+import { mockDb, User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport, CashAdvance, Disbursement, RetirementEntry } from './mockDb';
 
-export type { User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport };
+export type { User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport, CashAdvance, Disbursement, RetirementEntry };
 
 // Helper to determine if we should use Supabase or fallback to mock
 const useSupabase = () => {
@@ -1351,9 +1351,230 @@ export const db = {
         ...data,
         generated_by_name: usr ? usr.full_name : 'System'
       } as ReportExport;
-    } catch (e) {
+    } catch (e: any) {
+      if (useSupabase()) throw e;
       console.warn('Supabase createReportExport failed, using mock database:', e);
       return mockDb.createReportExport(exportData);
+    }
+  },
+
+  getCashAdvances: async (role: 'pm' | 'warehouse_manager' | 'cfo', userId: string): Promise<CashAdvance[]> => {
+    if (!useSupabase()) {
+      return mockDb.getCashAdvances(role, userId);
+    }
+    try {
+      const companyId = await getCompanyId();
+      
+      let query = supabase!
+        .from('cash_advances')
+        .select(`
+          *,
+          users:requested_by (full_name),
+          advance_disbursements (amount_ugx),
+          retirement_entries (amount_ugx)
+        `)
+        .eq('company_id', companyId)
+        .order('created_at', { ascending: false });
+
+      if (role === 'pm') {
+        query = query.eq('requested_by', userId);
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      return data.map((adv: any) => {
+        const amount_disbursed_ugx = adv.advance_disbursements?.amount_ugx ? Number(adv.advance_disbursements.amount_ugx) : 0;
+        const amount_retired_ugx = adv.retirement_entries?.reduce((sum: number, r: any) => sum + Number(r.amount_ugx), 0) || 0;
+        const outstanding_ugx = Math.max(0, amount_disbursed_ugx - amount_retired_ugx);
+
+        return {
+          ...adv,
+          requested_by_name: adv.users ? adv.users.full_name : 'PM Operator',
+          amount_disbursed_ugx,
+          amount_retired_ugx,
+          outstanding_ugx
+        } as CashAdvance;
+      });
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase getCashAdvances failed, using mock database:', e);
+      return mockDb.getCashAdvances(role, userId);
+    }
+  },
+
+  requestCashAdvance: async (
+    advance: Omit<CashAdvance, 'id' | 'company_id' | 'status' | 'created_at'>
+  ): Promise<CashAdvance> => {
+    if (!useSupabase()) {
+      return mockDb.requestCashAdvance(advance);
+    }
+    try {
+      const { data: advanceId, error } = await supabase!.rpc('rpc_request_cash_advance', {
+        p_project_name: advance.project_name,
+        p_purpose: advance.purpose,
+        p_amount_requested_ugx: advance.amount_requested_ugx,
+        p_expected_retirement_date: advance.expected_retirement_date
+      });
+
+      if (error) throw error;
+
+      const { data: newAdv, error: fetchError } = await supabase!
+        .from('cash_advances')
+        .select(`
+          *,
+          users:requested_by (full_name)
+        `)
+        .eq('id', advanceId)
+        .single();
+
+      if (fetchError) throw fetchError;
+
+      return {
+        ...newAdv,
+        requested_by_name: newAdv.users ? newAdv.users.full_name : 'PM Operator',
+        amount_disbursed_ugx: 0,
+        amount_retired_ugx: 0,
+        outstanding_ugx: 0
+      } as CashAdvance;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase requestCashAdvance failed, using mock database:', e);
+      return mockDb.requestCashAdvance(advance);
+    }
+  },
+
+  approveCashAdvance: async (id: string, approverId: string): Promise<CashAdvance> => {
+    if (!useSupabase()) {
+      return mockDb.approveCashAdvance(id, approverId);
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('cash_advances')
+        .update({
+          status: 'approved',
+          approved_by: approverId,
+          approved_at: new Date().toISOString()
+        })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as CashAdvance;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase approveCashAdvance failed, using mock database:', e);
+      return mockDb.approveCashAdvance(id, approverId);
+    }
+  },
+
+  rejectCashAdvance: async (id: string, approverId: string, reason: string): Promise<CashAdvance> => {
+    if (!useSupabase()) {
+      return mockDb.rejectCashAdvance(id, approverId, reason);
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('cash_advances')
+        .update({
+          status: 'rejected',
+          approved_by: approverId,
+          approved_at: new Date().toISOString(),
+          rejection_reason: reason
+        })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as CashAdvance;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase rejectCashAdvance failed, using mock database:', e);
+      return mockDb.rejectCashAdvance(id, approverId, reason);
+    }
+  },
+
+  disburseAdvance: async (
+    disb: Omit<Disbursement, 'id' | 'company_id' | 'created_at' | 'disbursed_at'>
+  ): Promise<void> => {
+    if (!useSupabase()) {
+      return mockDb.disburseAdvance(disb);
+    }
+    try {
+      const { error } = await supabase!.rpc('rpc_disburse_advance', {
+        p_advance_id: disb.advance_id,
+        p_method: disb.method,
+        p_amount_ugx: disb.amount_ugx,
+        p_bank_reference: disb.bank_reference || null,
+        p_bank_account: disb.bank_account || null,
+        p_witness_name: disb.witness_name || null,
+        p_signed_proof_url: disb.signed_proof_url || null
+      });
+
+      if (error) throw error;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase disburseAdvance failed, using mock database:', e);
+      return mockDb.disburseAdvance(disb);
+    }
+  },
+
+  submitRetirementEntry: async (
+    entry: Omit<RetirementEntry, 'id' | 'company_id' | 'created_at'>
+  ): Promise<void> => {
+    if (!useSupabase()) {
+      return mockDb.submitRetirementEntry(entry);
+    }
+    try {
+      const { error } = await supabase!.rpc('rpc_submit_retirement_entry', {
+        p_advance_id: entry.advance_id,
+        p_category: entry.category,
+        p_description: entry.description,
+        p_amount_ugx: entry.amount_ugx,
+        p_entry_date: entry.entry_date,
+        p_receipt_photo_url: entry.receipt_photo_url
+      });
+
+      if (error) throw error;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase submitRetirementEntry failed, using mock database:', e);
+      return mockDb.submitRetirementEntry(entry);
+    }
+  },
+
+  getRetirementEntries: async (advanceId: string): Promise<RetirementEntry[]> => {
+    if (!useSupabase()) {
+      return mockDb.getRetirementEntries(advanceId);
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('retirement_entries')
+        .select('*')
+        .eq('advance_id', advanceId)
+        .order('entry_date', { ascending: true });
+
+      if (error) throw error;
+      return data as RetirementEntry[];
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase getRetirementEntries failed, using mock database:', e);
+      return mockDb.getRetirementEntries(advanceId);
+    }
+  },
+
+  checkOverdueAdvances: async (): Promise<void> => {
+    if (!useSupabase()) {
+      return mockDb.checkOverdueAdvances();
+    }
+    try {
+      const { error } = await supabase!.rpc('rpc_check_overdue_advances');
+      if (error) throw error;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase checkOverdueAdvances failed, using mock database:', e);
+      return mockDb.checkOverdueAdvances();
     }
   }
 };

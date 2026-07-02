@@ -237,6 +237,54 @@ export interface ReportExport {
   generated_by_name?: string;
 }
 
+export interface CashAdvance {
+  id: string;
+  company_id: string;
+  requested_by: string;
+  project_name: string;
+  purpose: string;
+  amount_requested_ugx: number;
+  expected_retirement_date: string;
+  status: 'pending' | 'approved' | 'rejected' | 'disbursed' | 'partially_retired' | 'retired' | 'overdue';
+  approved_by?: string;
+  approved_at?: string;
+  rejection_reason?: string;
+  created_at: string;
+  // UI helpers
+  requested_by_name?: string;
+  outstanding_ugx?: number;
+  amount_disbursed_ugx?: number;
+  amount_retired_ugx?: number;
+}
+
+export interface Disbursement {
+  id: string;
+  company_id: string;
+  advance_id: string;
+  method: 'bank_transfer' | 'cash';
+  amount_ugx: number;
+  bank_reference?: string;
+  bank_account?: string;
+  witness_name?: string;
+  signed_proof_url?: string;
+  disbursed_by: string;
+  disbursed_at: string;
+  created_at: string;
+}
+
+export interface RetirementEntry {
+  id: string;
+  company_id: string;
+  advance_id: string;
+  submitted_by: string;
+  category: 'fuel' | 'allowances' | 'materials' | 'accommodation' | 'other';
+  description: string;
+  amount_ugx: number;
+  receipt_photo_url: string;
+  entry_date: string;
+  created_at: string;
+}
+
 // Initial Mock Seed Data
 const MOCK_COMPANY_ID = 'c1c1c1c1-1111-1111-1111-111111111111';
 const MOCK_USERS: User[] = [
@@ -475,6 +523,88 @@ function getDbState() {
     return { ...con, qr_label_id: labelId };
   });
 
+  const mockCashAdvances: CashAdvance[] = [
+    {
+      id: 'adv-pending-1',
+      company_id: MOCK_COMPANY_ID,
+      requested_by: 'u3333333-3333-3333-3333-333333333333',
+      project_name: 'Kampala Fiber Link',
+      purpose: 'Out of pocket allowances for trenching technicians',
+      amount_requested_ugx: 750000,
+      expected_retirement_date: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
+      status: 'pending',
+      created_at: new Date().toISOString()
+    },
+    {
+      id: 'adv-disbursed-1',
+      company_id: MOCK_COMPANY_ID,
+      requested_by: 'u3333333-3333-3333-3333-333333333333',
+      project_name: 'Entebbe Mast Upgrade',
+      purpose: 'Generator transport fuel and emergency materials',
+      amount_requested_ugx: 1200000,
+      expected_retirement_date: new Date(Date.now() + 5 * 86400000).toISOString().split('T')[0],
+      status: 'disbursed',
+      approved_by: 'u1111111-1111-1111-1111-111111111111',
+      approved_at: new Date().toISOString(),
+      created_at: new Date().toISOString()
+    },
+    {
+      id: 'adv-overdue-1',
+      company_id: MOCK_COMPANY_ID,
+      requested_by: 'u3333333-3333-3333-3333-333333333333',
+      project_name: 'Jinja Substation Earthing',
+      purpose: 'Copper rod purchases and welder allowances',
+      amount_requested_ugx: 950000,
+      expected_retirement_date: new Date(Date.now() - 3 * 86400000).toISOString().split('T')[0],
+      status: 'overdue',
+      approved_by: 'u1111111-1111-1111-1111-111111111111',
+      approved_at: new Date(Date.now() - 10 * 86400000).toISOString(),
+      created_at: new Date(Date.now() - 10 * 86400000).toISOString()
+    }
+  ];
+
+  const mockDisbursements: Disbursement[] = [
+    {
+      id: 'disb-1',
+      company_id: MOCK_COMPANY_ID,
+      advance_id: 'adv-disbursed-1',
+      method: 'bank_transfer',
+      amount_ugx: 1200000,
+      bank_reference: 'TXN-90210-ENT',
+      bank_account: 'DFCU Bank A/C 908123',
+      disbursed_by: 'u1111111-1111-1111-1111-111111111111',
+      disbursed_at: new Date().toISOString(),
+      created_at: new Date().toISOString()
+    },
+    {
+      id: 'disb-2',
+      company_id: MOCK_COMPANY_ID,
+      advance_id: 'adv-overdue-1',
+      method: 'cash',
+      amount_ugx: 950000,
+      witness_name: 'David Warehouse',
+      signed_proof_url: 'blob:https://egypro-proof-signed',
+      disbursed_by: 'u1111111-1111-1111-1111-111111111111',
+      disbursed_at: new Date(Date.now() - 9 * 86400000).toISOString(),
+      created_at: new Date(Date.now() - 9 * 86400000).toISOString()
+    }
+  ];
+
+  const mockRetirementEntries: RetirementEntry[] = [
+    {
+      id: 'ret-1',
+      company_id: MOCK_COMPANY_ID,
+      advance_id: 'adv-disbursed-1',
+      submitted_by: 'u3333333-3333-3333-3333-333333333333',
+      category: 'fuel',
+      description: 'Fuel for transport truck Jinja-Kampala',
+      amount_ugx: 350000,
+      receipt_photo_url: 'blob:https://egypro-receipt-1',
+      entry_date: new Date().toISOString().split('T')[0],
+      created_at: new Date().toISOString()
+    }
+  ];
+
   const state = {
     users: MOCK_USERS,
     categories: MOCK_CATEGORIES,
@@ -492,6 +622,9 @@ function getDbState() {
     notificationChannels: [] as NotificationChannel[],
     qrLabels: defaultQrLabels,
     reportExports: [] as ReportExport[],
+    cashAdvances: mockCashAdvances,
+    disbursements: mockDisbursements,
+    retirementEntries: mockRetirementEntries,
     sequences: {
       'cat11111-1111-1111-1111-111111111111': 2,
       'cat22222-2222-2222-2222-222222222222': 2,
@@ -1874,5 +2007,209 @@ export const mockDb = {
       ...newReport,
       generated_by_name: usr ? usr.full_name : 'System'
     };
+  },
+
+  getCashAdvances: async (role: 'pm' | 'warehouse_manager' | 'cfo', userId: string): Promise<CashAdvance[]> => {
+    const state = getDbState();
+    const advances = state.cashAdvances || [];
+    
+    // Filter based on role
+    const filtered = role === 'cfo' 
+      ? advances 
+      : advances.filter((a: CashAdvance) => a.requested_by === userId);
+
+    // Map live balances and UI helpers
+    return filtered.map((adv: CashAdvance) => {
+      const pmUser = state.users.find((u: User) => u.id === adv.requested_by);
+      const disb = (state.disbursements || []).find((d: Disbursement) => d.advance_id === adv.id);
+      const rets = (state.retirementEntries || []).filter((r: RetirementEntry) => r.advance_id === adv.id);
+      
+      const amount_disbursed_ugx = disb ? Number(disb.amount_ugx) : 0;
+      const amount_retired_ugx = rets.reduce((sum: number, r: RetirementEntry) => sum + Number(r.amount_ugx), 0);
+      const outstanding_ugx = Math.max(0, amount_disbursed_ugx - amount_retired_ugx);
+
+      return {
+        ...adv,
+        requested_by_name: pmUser ? pmUser.full_name : 'PM Operator',
+        amount_disbursed_ugx,
+        amount_retired_ugx,
+        outstanding_ugx
+      };
+    });
+  },
+
+  requestCashAdvance: async (
+    advance: Omit<CashAdvance, 'id' | 'company_id' | 'status' | 'created_at'>
+  ): Promise<CashAdvance> => {
+    const state = getDbState();
+    const advances = state.cashAdvances || [];
+
+    // Enforce overdue check blocking
+    const hasOverdue = advances.some((a: CashAdvance) => a.requested_by === advance.requested_by && a.status === 'overdue');
+    if (hasOverdue) {
+      throw new Error('Blocked: You have overdue cash advances that must be accounted for first.');
+    }
+
+    const id = 'adv_' + Math.random().toString(36).substr(2, 9);
+    const newAdv: CashAdvance = {
+      id,
+      company_id: MOCK_COMPANY_ID,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+      ...advance
+    };
+
+    if (!state.cashAdvances) state.cashAdvances = [];
+    state.cashAdvances.push(newAdv);
+    saveDbState(state);
+
+    const pmUser = state.users.find((u: User) => u.id === advance.requested_by);
+    return {
+      ...newAdv,
+      requested_by_name: pmUser ? pmUser.full_name : 'PM Operator',
+      amount_disbursed_ugx: 0,
+      amount_retired_ugx: 0,
+      outstanding_ugx: 0
+    };
+  },
+
+  approveCashAdvance: async (id: string, approverId: string): Promise<CashAdvance> => {
+    const state = getDbState();
+    const advances = state.cashAdvances || [];
+    const adv = advances.find((a: CashAdvance) => a.id === id);
+    if (!adv) throw new Error('Cash advance request not found.');
+
+    adv.status = 'approved';
+    adv.approved_by = approverId;
+    adv.approved_at = new Date().toISOString();
+    saveDbState(state);
+
+    return adv;
+  },
+
+  rejectCashAdvance: async (id: string, approverId: string, reason: string): Promise<CashAdvance> => {
+    const state = getDbState();
+    const advances = state.cashAdvances || [];
+    const adv = advances.find((a: CashAdvance) => a.id === id);
+    if (!adv) throw new Error('Cash advance request not found.');
+
+    adv.status = 'rejected';
+    adv.approved_by = approverId;
+    adv.approved_at = new Date().toISOString();
+    adv.rejection_reason = reason;
+    saveDbState(state);
+
+    return adv;
+  },
+
+  disburseAdvance: async (
+    disb: Omit<Disbursement, 'id' | 'company_id' | 'created_at' | 'disbursed_at'>
+  ): Promise<void> => {
+    const state = getDbState();
+    const advances = state.cashAdvances || [];
+    const adv = advances.find((a: CashAdvance) => a.id === disb.advance_id);
+    if (!adv) throw new Error('Cash advance request not found.');
+
+    if (disb.method === 'bank_transfer' && (!disb.bank_reference || !disb.bank_account)) {
+      throw new Error('Invalid disbursement: Bank reference and bank account are required for transfer disbursements.');
+    }
+    if (disb.method === 'cash' && (!disb.witness_name || !disb.signed_proof_url)) {
+      throw new Error('Invalid disbursement: Witness name and signed proof receipt upload are required for cash handovers.');
+    }
+
+    const id = 'disb_' + Math.random().toString(36).substr(2, 9);
+    const newDisb: Disbursement = {
+      id,
+      company_id: MOCK_COMPANY_ID,
+      created_at: new Date().toISOString(),
+      disbursed_at: new Date().toISOString(),
+      ...disb
+    };
+
+    if (!state.disbursements) state.disbursements = [];
+    state.disbursements.push(newDisb);
+
+    adv.status = 'disbursed';
+    saveDbState(state);
+  },
+
+  submitRetirementEntry: async (
+    entry: Omit<RetirementEntry, 'id' | 'company_id' | 'created_at'>
+  ): Promise<void> => {
+    const state = getDbState();
+    const advances = state.cashAdvances || [];
+    const adv = advances.find((a: CashAdvance) => a.id === entry.advance_id);
+    if (!adv) throw new Error('Cash advance request not found.');
+
+    const id = 'ret_' + Math.random().toString(36).substr(2, 9);
+    const newEntry: RetirementEntry = {
+      id,
+      company_id: MOCK_COMPANY_ID,
+      created_at: new Date().toISOString(),
+      ...entry
+    };
+
+    if (!state.retirementEntries) state.retirementEntries = [];
+    state.retirementEntries.push(newEntry);
+
+    // Compute live balance progress
+    const disb = (state.disbursements || []).find((d: Disbursement) => d.advance_id === adv.id);
+    const rets = (state.retirementEntries || []).filter((r: RetirementEntry) => r.advance_id === adv.id);
+    
+    const amount_disbursed_ugx = disb ? Number(disb.amount_ugx) : 0;
+    const amount_retired_ugx = rets.reduce((sum: number, r: RetirementEntry) => sum + Number(r.amount_ugx), 0);
+
+    if (amount_retired_ugx >= amount_disbursed_ugx) {
+      adv.status = 'retired';
+    } else {
+      adv.status = 'partially_retired';
+    }
+
+    saveDbState(state);
+  },
+
+  getRetirementEntries: async (advanceId: string): Promise<RetirementEntry[]> => {
+    const state = getDbState();
+    return (state.retirementEntries || []).filter((r: RetirementEntry) => r.advance_id === advanceId);
+  },
+
+  checkOverdueAdvances: async (): Promise<void> => {
+    const state = getDbState();
+    const advances = state.cashAdvances || [];
+    const today = new Date().toISOString().split('T')[0];
+
+    advances.forEach((adv: CashAdvance) => {
+      if (['disbursed', 'partially_retired'].includes(adv.status) && adv.expected_retirement_date < today) {
+        adv.status = 'overdue';
+
+        // Notify PM
+        state.notifications.push({
+          id: 'notif_' + Math.random().toString(36).substr(2, 9),
+          company_id: MOCK_COMPANY_ID,
+          user_id: adv.requested_by,
+          title: 'Cash Advance Overdue',
+          message: `Your advance for project ${adv.project_name} is overdue. Please submit accountability receipts.`,
+          link: '/advances',
+          is_read: false,
+          created_at: new Date().toISOString()
+        });
+
+        // Notify CFOs
+        state.users.filter((u: User) => u.role === 'cfo').forEach((cfo: User) => {
+          state.notifications.push({
+            id: 'notif_' + Math.random().toString(36).substr(2, 9),
+            company_id: MOCK_COMPANY_ID,
+            user_id: cfo.id,
+            title: 'PM Cash Advance Overdue',
+            message: `An advance of ${adv.amount_requested_ugx} UGX is overdue for accountability checks.`,
+            link: '/advances',
+            is_read: false,
+            created_at: new Date().toISOString()
+          });
+        });
+      }
+    });
+
+    saveDbState(state);
   }
 };

@@ -1049,3 +1049,400 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 
+-- 9. CASH ADVANCES & ACCOUNTABILITY SCHEMA
+
+-- Enums
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'advance_status') THEN
+    CREATE TYPE advance_status AS ENUM ('pending', 'approved', 'rejected', 'disbursed', 'partially_retired', 'retired', 'overdue');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'disbursement_method') THEN
+    CREATE TYPE disbursement_method AS ENUM ('bank_transfer', 'cash');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'retirement_category') THEN
+    CREATE TYPE retirement_category AS ENUM ('fuel', 'allowances', 'materials', 'accommodation', 'other');
+  END IF;
+END
+$$;
+
+-- Table: cash_advances
+CREATE TABLE IF NOT EXISTS cash_advances (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  requested_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_name TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  amount_requested_ugx NUMERIC(15, 2) NOT NULL CHECK (amount_requested_ugx > 0),
+  expected_retirement_date DATE NOT NULL,
+  status advance_status NOT NULL DEFAULT 'pending',
+  approved_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  approved_at TIMESTAMPTZ,
+  rejection_reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Table: advance_disbursements
+CREATE TABLE IF NOT EXISTS advance_disbursements (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  advance_id UUID NOT NULL UNIQUE REFERENCES cash_advances(id) ON DELETE CASCADE,
+  method disbursement_method NOT NULL,
+  amount_ugx NUMERIC(15, 2) NOT NULL CHECK (amount_ugx > 0),
+  bank_reference TEXT,
+  bank_account TEXT,
+  witness_name TEXT,
+  signed_proof_url TEXT,
+  disbursed_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  disbursed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT method_requirements CHECK (
+    (method = 'bank_transfer' AND bank_reference IS NOT NULL AND bank_account IS NOT NULL) OR
+    (method = 'cash' AND witness_name IS NOT NULL AND signed_proof_url IS NOT NULL)
+  )
+);
+
+-- Table: retirement_entries (Append-Only)
+CREATE TABLE IF NOT EXISTS retirement_entries (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  advance_id UUID NOT NULL REFERENCES cash_advances(id) ON DELETE CASCADE,
+  submitted_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  category retirement_category NOT NULL,
+  description TEXT NOT NULL,
+  amount_ugx NUMERIC(15, 2) NOT NULL CHECK (amount_ugx > 0),
+  receipt_photo_url TEXT NOT NULL,
+  entry_date DATE NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- View: advance_balances
+CREATE OR REPLACE VIEW advance_balances AS
+SELECT
+  ca.id AS advance_id,
+  ca.requested_by,
+  ca.company_id,
+  COALESCE(ad.amount_ugx, 0) AS amount_disbursed_ugx,
+  COALESCE(SUM(re.amount_ugx), 0) AS amount_retired_ugx,
+  COALESCE(ad.amount_ugx, 0) - COALESCE(SUM(re.amount_ugx), 0) AS outstanding_ugx,
+  ca.expected_retirement_date,
+  ca.status
+FROM cash_advances ca
+LEFT JOIN advance_disbursements ad ON ad.advance_id = ca.id
+LEFT JOIN retirement_entries re ON re.advance_id = ca.id
+GROUP BY ca.id, ad.amount_ugx;
+
+-- RLS: cash_advances
+ALTER TABLE cash_advances ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY advances_select_own_pm ON cash_advances
+  FOR SELECT USING (company_id = get_current_user_company() AND requested_by = auth.uid());
+
+CREATE POLICY advances_select_all_cfo ON cash_advances
+  FOR SELECT USING (company_id = get_current_user_company() AND get_current_user_role() = 'cfo');
+
+CREATE POLICY advances_update_cfo ON cash_advances
+  FOR UPDATE USING (company_id = get_current_user_company() AND get_current_user_role() = 'cfo')
+  WITH CHECK (
+    company_id = (SELECT c.company_id FROM cash_advances c WHERE c.id = id) AND
+    requested_by = (SELECT c.requested_by FROM cash_advances c WHERE c.id = id) AND
+    amount_requested_ugx = (SELECT c.amount_requested_ugx FROM cash_advances c WHERE c.id = id)
+  );
+
+-- RLS: advance_disbursements
+ALTER TABLE advance_disbursements ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY disbursements_select ON advance_disbursements
+  FOR SELECT USING (
+    company_id = get_current_user_company() AND (
+      get_current_user_role() = 'cfo' OR
+      EXISTS (SELECT 1 FROM cash_advances ca WHERE ca.id = advance_id AND ca.requested_by = auth.uid())
+    )
+  );
+
+-- RLS: retirement_entries
+ALTER TABLE retirement_entries ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY retirement_select ON retirement_entries
+  FOR SELECT USING (
+    company_id = get_current_user_company() AND (
+      get_current_user_role() = 'cfo' OR submitted_by = auth.uid()
+    )
+  );
+
+-- Direct client modifications (INSERT/UPDATE/DELETE) on disbursements and retirements are denied by default.
+-- All writes are handled via database SECURITY DEFINER RPCs.
+
+
+-- RPC 1: Request Cash Advance (PM Only)
+CREATE OR REPLACE FUNCTION rpc_request_cash_advance(
+  p_project_name TEXT,
+  p_purpose TEXT,
+  p_amount_requested_ugx NUMERIC,
+  p_expected_retirement_date DATE
+)
+RETURNS UUID AS $$
+DECLARE
+  v_company_id UUID;
+  v_user_role user_role;
+  v_has_overdue BOOLEAN;
+  v_advance_id UUID;
+BEGIN
+  -- Resolve company and role
+  v_company_id := get_current_user_company();
+  v_user_role := get_current_user_role();
+
+  IF v_user_role IS NULL OR v_user_role != 'pm' THEN
+    RAISE EXCEPTION 'Unauthorized: Only Project Managers can request cash advances.';
+  END IF;
+
+  -- Check if user has any overdue cash advances
+  SELECT EXISTS (
+    SELECT 1 FROM cash_advances
+    WHERE requested_by = auth.uid() AND status = 'overdue' AND company_id = v_company_id
+  ) INTO v_has_overdue;
+
+  IF v_has_overdue THEN
+    RAISE EXCEPTION 'Blocked: You have overdue cash advances that must be accounted for first.';
+  END IF;
+
+  -- Insert advance
+  INSERT INTO cash_advances (
+    company_id,
+    requested_by,
+    project_name,
+    purpose,
+    amount_requested_ugx,
+    expected_retirement_date,
+    status
+  ) VALUES (
+    v_company_id,
+    auth.uid(),
+    p_project_name,
+    p_purpose,
+    p_amount_requested_ugx,
+    p_expected_retirement_date,
+    'pending'
+  )
+  RETURNING id INTO v_advance_id;
+
+  RETURN v_advance_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
+-- RPC 2: Disburse Cash Advance (CFO Only)
+CREATE OR REPLACE FUNCTION rpc_disburse_advance(
+  p_advance_id UUID,
+  p_method disbursement_method,
+  p_amount_ugx NUMERIC,
+  p_bank_reference TEXT,
+  p_bank_account TEXT,
+  p_witness_name TEXT,
+  p_signed_proof_url TEXT
+)
+RETURNS VOID AS $$
+DECLARE
+  v_company_id UUID;
+  v_user_role user_role;
+  v_status advance_status;
+BEGIN
+  -- Resolve company and role
+  v_company_id := get_current_user_company();
+  v_user_role := get_current_user_role();
+
+  IF v_user_role IS NULL OR v_user_role != 'cfo' THEN
+    RAISE EXCEPTION 'Unauthorized: Only CFOs can disburse cash advances.';
+  END IF;
+
+  -- Lock advance and verify
+  SELECT status INTO v_status
+  FROM cash_advances
+  WHERE id = p_advance_id AND company_id = v_company_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Advance request not found.';
+  END IF;
+
+  IF v_status != 'approved' THEN
+    RAISE EXCEPTION 'Advance request is not in APPROVED state.';
+  END IF;
+
+  -- Enforce check constraints in code block
+  IF p_method = 'bank_transfer' AND (p_bank_reference IS NULL OR p_bank_account IS NULL) THEN
+    RAISE EXCEPTION 'Invalid disbursement: Bank reference and bank account are required for transfer disbursements.';
+  END IF;
+
+  IF p_method = 'cash' AND (p_witness_name IS NULL OR p_signed_proof_url IS NULL) THEN
+    RAISE EXCEPTION 'Invalid disbursement: Witness name and signed proof receipt upload are required for cash handovers.';
+  END IF;
+
+  -- Create disbursement entry
+  INSERT INTO advance_disbursements (
+    company_id,
+    advance_id,
+    method,
+    amount_ugx,
+    bank_reference,
+    bank_account,
+    witness_name,
+    signed_proof_url,
+    disbursed_by
+  ) VALUES (
+    v_company_id,
+    p_advance_id,
+    p_method,
+    p_amount_ugx,
+    p_bank_reference,
+    p_bank_account,
+    p_witness_name,
+    p_signed_proof_url,
+    auth.uid()
+  );
+
+  -- Transition status
+  UPDATE cash_advances
+  SET status = 'disbursed'
+  WHERE id = p_advance_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
+-- RPC 3: Submit Retirement Entry (PM Only)
+CREATE OR REPLACE FUNCTION rpc_submit_retirement_entry(
+  p_advance_id UUID,
+  p_category retirement_category,
+  p_description TEXT,
+  p_amount_ugx NUMERIC,
+  p_entry_date DATE,
+  p_receipt_photo_url TEXT
+)
+RETURNS VOID AS $$
+DECLARE
+  v_company_id UUID;
+  v_user_role user_role;
+  v_requested_by UUID;
+  v_status advance_status;
+  v_disbursed NUMERIC;
+  v_retired NUMERIC;
+BEGIN
+  -- Resolve company and role
+  v_company_id := get_current_user_company();
+  v_user_role := get_current_user_role();
+
+  IF v_user_role IS NULL OR v_user_role != 'pm' THEN
+    RAISE EXCEPTION 'Unauthorized: Only Project Managers can submit retirement entries.';
+  END IF;
+
+  -- Lock advance details and verify
+  SELECT requested_by, status INTO v_requested_by, v_status
+  FROM cash_advances
+  WHERE id = p_advance_id AND company_id = v_company_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Cash advance record not found.';
+  END IF;
+
+  IF v_requested_by != auth.uid() THEN
+    RAISE EXCEPTION 'Unauthorized: You can only submit accountability entries for your own cash advances.';
+  END IF;
+
+  IF v_status NOT IN ('disbursed', 'partially_retired', 'overdue') THEN
+    RAISE EXCEPTION 'Invalid state: accountability reports can only be added to active disbursed advances.';
+  END IF;
+
+  -- Insert retirement entry
+  INSERT INTO retirement_entries (
+    company_id,
+    advance_id,
+    submitted_by,
+    category,
+    description,
+    amount_ugx,
+    receipt_photo_url,
+    entry_date
+  ) VALUES (
+    v_company_id,
+    p_advance_id,
+    auth.uid(),
+    p_category,
+    p_description,
+    p_amount_ugx,
+    p_receipt_photo_url,
+    p_entry_date
+  );
+
+  -- Recalculate balances
+  SELECT amount_disbursed_ugx, amount_retired_ugx INTO v_disbursed, v_retired
+  FROM advance_balances
+  WHERE advance_id = p_advance_id;
+
+  IF v_retired >= v_disbursed THEN
+    UPDATE cash_advances
+    SET status = 'retired'
+    WHERE id = p_advance_id;
+  ELSE
+    UPDATE cash_advances
+    SET status = 'partially_retired'
+    WHERE id = p_advance_id;
+  END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
+-- RPC 4: Check Overdue Advances (Scheduled Trigger)
+CREATE OR REPLACE FUNCTION rpc_check_overdue_advances()
+RETURNS VOID AS $$
+DECLARE
+  v_record RECORD;
+BEGIN
+  -- Select all active disbursed advances where date has passed
+  FOR v_record IN
+    SELECT id, company_id, requested_by, project_name, amount_requested_ugx
+    FROM cash_advances
+    WHERE status IN ('disbursed', 'partially_retired')
+      AND expected_retirement_date < current_date
+  LOOP
+    -- Lock row and transition status
+    UPDATE cash_advances
+    SET status = 'overdue'
+    WHERE id = v_record.id;
+
+    -- Send notifications to PM
+    INSERT INTO notifications (
+      company_id,
+      user_id,
+      title,
+      message,
+      link
+    ) VALUES (
+      v_record.company_id,
+      v_record.requested_by,
+      'Cash Advance Overdue',
+      'Your advance for project ' || v_record.project_name || ' is overdue. Please submit accountability receipts.',
+      '/advances'
+    );
+
+    -- Send notifications to CFOs
+    INSERT INTO notifications (
+      company_id,
+      user_id,
+      title,
+      message,
+      link
+    )
+    SELECT 
+      v_record.company_id,
+      u.id,
+      'PM Cash Advance Overdue',
+      'An advance of ' || v_record.amount_requested_ugx::text || ' UGX is overdue for accountability checks.',
+      '/advances'
+    FROM users u
+    WHERE u.company_id = v_record.company_id AND u.role = 'cfo' AND u.is_active = true;
+  END LOOP;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+

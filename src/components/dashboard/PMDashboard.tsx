@@ -20,6 +20,8 @@ export function StatusBadge({ status }: { status: string }) {
     fulfilled: 'bg-success-tint text-success border-success/20',
     returned: 'bg-success-tint text-success border-success/20',
     cancelled: 'bg-neutral-tint text-text-muted border-neutral/20',
+    disbursed: 'bg-warning-tint text-warning border-warning/20',
+    partially_retired: 'bg-warning-tint text-warning border-warning/20'
   };
 
   const displayLabels: Record<string, string> = {
@@ -35,6 +37,8 @@ export function StatusBadge({ status }: { status: string }) {
     fulfilled: 'Checked Out',
     returned: 'Returned',
     cancelled: 'Cancelled',
+    disbursed: 'Disbursed',
+    partially_retired: 'Partially Accounted'
   };
 
   const style = styles[status] || 'bg-background text-text border-border';
