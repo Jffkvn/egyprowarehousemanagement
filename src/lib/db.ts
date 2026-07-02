@@ -11,6 +11,19 @@ const useSupabase = () => {
   return supabase !== null;
 };
 
+// Resolve the active user's company id dynamically without relying on select limit 1
+const getCompanyId = async (): Promise<string> => {
+  const { data: { user: authUser } } = await supabase!.auth.getUser();
+  if (!authUser) throw new Error('User not authenticated');
+  const { data: profile, error } = await supabase!
+    .from('users')
+    .select('company_id')
+    .eq('id', authUser.id)
+    .single();
+  if (error || !profile) throw new Error('Could not resolve company profile');
+  return profile.company_id;
+};
+
 export const db = {
   isSupabaseConfigured: () => {
     return useSupabase();
@@ -162,11 +175,11 @@ export const db = {
       return mockDb.addCategory(category);
     }
     try {
-      const { data: companyData } = await supabase!.from('companies').select('id').limit(1).single();
+      const companyId = await getCompanyId();
       const { data, error } = await supabase!
         .from('equipment_categories')
         .insert({
-          company_id: companyData?.id,
+          company_id: companyId,
           name: category.name,
           code_prefix: category.code_prefix,
           item_type: category.item_type
@@ -175,7 +188,8 @@ export const db = {
         .single();
       if (error) throw error;
       return data as Category;
-    } catch (e) {
+    } catch (e: any) {
+      if (useSupabase()) throw e;
       console.warn('Supabase addCategory failed, using mock database:', e);
       return mockDb.addCategory(category);
     }
@@ -192,7 +206,8 @@ export const db = {
         .order('asset_code', { ascending: true });
       if (error) throw error;
       return data as Equipment[];
-    } catch (e) {
+    } catch (e: any) {
+      if (useSupabase()) throw e;
       console.warn('Supabase getEquipment failed, using mock database:', e);
       return mockDb.getEquipment();
     }
@@ -203,8 +218,7 @@ export const db = {
       return mockDb.addEquipment(item, quantity);
     }
     try {
-      const { data: companyData } = await supabase!.from('companies').select('id').limit(1).single();
-      const companyId = companyData?.id;
+      const companyId = await getCompanyId();
 
       const addedItems: Equipment[] = [];
       for (let i = 0; i < quantity; i++) {
@@ -242,7 +256,8 @@ export const db = {
         });
       }
       return addedItems;
-    } catch (e) {
+    } catch (e: any) {
+      if (useSupabase()) throw e;
       console.warn('Supabase addEquipment failed, using mock database:', e);
       return mockDb.addEquipment(item, quantity);
     }
@@ -259,7 +274,8 @@ export const db = {
         .order('name', { ascending: true });
       if (error) throw error;
       return data as ConsumableStock[];
-    } catch (e) {
+    } catch (e: any) {
+      if (useSupabase()) throw e;
       console.warn('Supabase getConsumables failed, using mock database:', e);
       return mockDb.getConsumables();
     }
@@ -270,8 +286,7 @@ export const db = {
       return mockDb.addConsumable(item);
     }
     try {
-      const { data: companyData } = await supabase!.from('companies').select('id').limit(1).single();
-      const companyId = companyData?.id;
+      const companyId = await getCompanyId();
 
       // Check if SKU exists already by name
       const { data: existing, error: findError } = await supabase!
@@ -335,8 +350,9 @@ export const db = {
         entry_method: 'manual'
       });
 
-      return newCon;
-    } catch (e) {
+      return newCon as ConsumableStock;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
       console.warn('Supabase addConsumable failed, using mock database:', e);
       return mockDb.addConsumable(item);
     }
@@ -427,71 +443,26 @@ export const db = {
       return mockDb.createRequest(request, items);
     }
     try {
-      const { data: companyData } = await supabase!.from('companies').select('id').limit(1).single();
-      const companyId = companyData?.id;
-
-      // Determine routing logic by fetching settings and items
-      const { data: settings } = await supabase!.from('settings').select('approval_threshold_ugx').limit(1).single();
-      const threshold = settings?.approval_threshold_ugx || 500000;
-      let routesToCfo = false;
-
-      // Check each item
-      for (const item of items) {
-        if (item.equipment_id) {
-          const { data: eq } = await supabase!.from('equipment').select('*').eq('id', item.equipment_id).single();
-          if (!eq || eq.unit_value_ugx >= threshold || eq.status !== 'available') {
-            routesToCfo = true;
-          }
-          // Check if leaves at least 1 unit remaining in stock of same model
-          if (eq) {
-            const { count } = await supabase!
-              .from('equipment')
-              .select('*', { count: 'exact', head: true })
-              .eq('name', eq.name)
-              .eq('status', 'available');
-            if (count === null || count <= 1) {
-              routesToCfo = true;
-            }
-          }
-        } else if (item.consumable_id) {
-          const { data: con } = await supabase!.from('consumable_stock').select('*').eq('id', item.consumable_id).single();
-          if (!con || con.unit_value_ugx >= threshold || con.quantity_on_hand < item.quantity_requested || con.quantity_on_hand - item.quantity_requested < 1) {
-            routesToCfo = true;
-          }
-        }
-      }
-
-      // Insert request
-      const { data: newRequest, error } = await supabase!
-        .from('requests')
-        .insert({
-          company_id: companyId,
-          requested_by: request.requested_by,
-          project_name: request.project_name,
-          site_location: request.site_location || null,
-          needed_from: request.needed_from,
-          needed_until: request.needed_until || null,
-          status: 'pending',
-          routed_to: routesToCfo ? 'cfo' : 'warehouse_manager'
-        })
-        .select()
-        .single();
+      const { data: requestId, error } = await supabase!.rpc('rpc_create_request', {
+        p_project_name: request.project_name,
+        p_site_location: request.site_location || null,
+        p_needed_from: request.needed_from,
+        p_needed_until: request.needed_until || null,
+        p_items: items // pass as json array directly
+      });
 
       if (error) throw error;
 
-      // Insert request items
-      const itemsToInsert = items.map(it => ({
-        request_id: newRequest.id,
-        equipment_id: it.equipment_id || null,
-        consumable_id: it.consumable_id || null,
-        quantity_requested: it.quantity_requested
-      }));
+      const { data: newRequest, error: fetchError } = await supabase!
+        .from('requests')
+        .select('*')
+        .eq('id', requestId)
+        .single();
 
-      const { error: itemsError } = await supabase!.from('request_items').insert(itemsToInsert);
-      if (itemsError) throw itemsError;
-
+      if (fetchError) throw fetchError;
       return newRequest as Request;
-    } catch (e) {
+    } catch (e: any) {
+      if (useSupabase()) throw e;
       console.warn('Supabase createRequest failed, using mock database:', e);
       return mockDb.createRequest(request, items);
     }
@@ -514,7 +485,8 @@ export const db = {
         .single();
       if (error) throw error;
       return data as Request;
-    } catch (e) {
+    } catch (e: any) {
+      if (useSupabase()) throw e;
       console.warn('Supabase approveRequest failed, using mock database:', e);
       return mockDb.approveRequest(requestId, approverId);
     }
@@ -538,7 +510,8 @@ export const db = {
         .single();
       if (error) throw error;
       return data as Request;
-    } catch (e) {
+    } catch (e: any) {
+      if (useSupabase()) throw e;
       console.warn('Supabase rejectRequest failed, using mock database:', e);
       return mockDb.rejectRequest(requestId, approverId, reason);
     }
@@ -549,70 +522,23 @@ export const db = {
       return mockDb.checkoutRequest(requestId, performedBy, entryMethod);
     }
     try {
-      // 1. Fetch request details and items
-      const { data: req } = await supabase!.from('requests').select('*').eq('id', requestId).single();
-      const { data: items } = await supabase!.from('request_items').select('*').eq('request_id', requestId);
-
-      if (!req || !items) throw new Error('Request or items not found');
-
-      // 2. Transact items
-      for (const item of items) {
-        if (item.equipment_id) {
-          // Reusable - Set status to checked_out
-          await supabase!
-            .from('equipment')
-            .update({ status: 'checked_out', current_location: req.site_location || 'Field Site' })
-            .eq('id', item.equipment_id);
-
-          // Log transaction
-          await supabase!.from('transactions').insert({
-            company_id: req.company_id,
-            transaction_type: 'checkout',
-            equipment_id: item.equipment_id,
-            request_id: requestId,
-            quantity: 1,
-            performed_by: performedBy,
-            counterparty: req.requested_by,
-            notes: `Checked out for project: ${req.project_name}`,
-            entry_method: entryMethod
-          });
-        } else if (item.consumable_id) {
-          // Consumable - Decrement stock quantity
-          const { data: con } = await supabase!.from('consumable_stock').select('quantity_on_hand').eq('id', item.consumable_id).single();
-          if (con) {
-            const newQty = Math.max(0, con.quantity_on_hand - item.quantity_requested);
-            await supabase!
-              .from('consumable_stock')
-              .update({ quantity_on_hand: newQty })
-              .eq('id', item.consumable_id);
-
-            // Log transaction
-            await supabase!.from('transactions').insert({
-              company_id: req.company_id,
-              transaction_type: 'stock_consumed',
-              consumable_id: item.consumable_id,
-              request_id: requestId,
-              quantity: item.quantity_requested,
-              performed_by: performedBy,
-              counterparty: req.requested_by,
-              notes: `Consumed for project: ${req.project_name}`,
-              entry_method: entryMethod
-            });
-          }
-        }
-      }
-
-      // 3. Mark request as fulfilled
-      const { data, error } = await supabase!
-        .from('requests')
-        .update({ status: 'fulfilled' })
-        .eq('id', requestId)
-        .select()
-        .single();
+      const { error } = await supabase!.rpc('rpc_checkout_request', {
+        p_request_id: requestId,
+        p_entry_method: entryMethod
+      });
 
       if (error) throw error;
+
+      const { data, error: fetchError } = await supabase!
+        .from('requests')
+        .select('*')
+        .eq('id', requestId)
+        .single();
+
+      if (fetchError) throw fetchError;
       return data as Request;
-    } catch (e) {
+    } catch (e: any) {
+      if (useSupabase()) throw e;
       console.warn('Supabase checkoutRequest failed, using mock database:', e);
       return mockDb.checkoutRequest(requestId, performedBy, entryMethod);
     }
@@ -630,57 +556,17 @@ export const db = {
       return mockDb.returnRequestItem(requestId, equipmentId, condition, notes, performedBy, entryMethod);
     }
     try {
-      const { data: req } = await supabase!.from('requests').select('*').eq('id', requestId).single();
-      if (!req) throw new Error('Request not found');
-
-      // Update equipment status
-      const eqStatus = condition === 'good' ? 'available' : 'under_repair';
-      const eqLoc = condition === 'good' ? 'Kampala Central Warehouse' : 'Repair Bay';
-      
-      const { data: eq } = await supabase!.from('equipment').select('condition_notes').eq('id', equipmentId).single();
-      const updatedNotes = notes ? `${notes} (Logged during return)` : `Logged as ${condition} during return.`;
-
-      await supabase!
-        .from('equipment')
-        .update({
-          status: eqStatus,
-          current_location: eqLoc,
-          condition_notes: updatedNotes
-        })
-        .eq('id', equipmentId);
-
-      // Log transaction
-      await supabase!.from('transactions').insert({
-        company_id: req.company_id,
-        transaction_type: 'return',
-        equipment_id: equipmentId,
-        request_id: requestId,
-        quantity: 1,
-        performed_by: performedBy,
-        counterparty: req.requested_by,
-        condition_at_event: condition,
-        notes: notes || `Returned condition: ${condition}`,
-        entry_method: entryMethod
+      const { error } = await supabase!.rpc('rpc_return_request_item', {
+        p_request_id: requestId,
+        p_equipment_id: equipmentId,
+        p_condition: condition,
+        p_notes: notes || '',
+        p_entry_method: entryMethod
       });
 
-      // Check if all reusable items in this request have been returned
-      const { data: items } = await supabase!.from('request_items').select('equipment_id').eq('request_id', requestId);
-      const reusableEqIds = items?.filter(i => i.equipment_id).map(i => i.equipment_id) || [];
-
-      if (reusableEqIds.length > 0) {
-        // Count how many are still checked_out
-        const { count } = await supabase!
-          .from('equipment')
-          .select('*', { count: 'exact', head: true })
-          .in('id', reusableEqIds)
-          .eq('status', 'checked_out');
-
-        if (count === 0) {
-          // Mark request returned
-          await supabase!.from('requests').update({ status: 'returned' }).eq('id', requestId);
-        }
-      }
-    } catch (e) {
+      if (error) throw error;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
       console.warn('Supabase returnRequestItem failed, using mock database:', e);
       return mockDb.returnRequestItem(requestId, equipmentId, condition, notes, performedBy, entryMethod);
     }
@@ -782,9 +668,7 @@ export const db = {
       return mockDb.createProcurement(procurement);
     }
     try {
-      const { data: companyData } = await supabase!.from('companies').select('id').limit(1).single();
-      const companyId = companyData?.id;
-
+      const companyId = await getCompanyId();
       const { data, error } = await supabase!
         .from('procurement_requests')
         .insert({
@@ -801,7 +685,8 @@ export const db = {
 
       if (error) throw error;
       return data as ProcurementRequest;
-    } catch (e) {
+    } catch (e: any) {
+      if (useSupabase()) throw e;
       console.warn('Supabase createProcurement failed, using mock database:', e);
       return mockDb.createProcurement(procurement);
     }
@@ -812,8 +697,7 @@ export const db = {
       return mockDb.receiveProcurement(procurementId, performedBy, status);
     }
     try {
-      const { data: companyData } = await supabase!.from('companies').select('id').limit(1).single();
-      const companyId = companyData?.id;
+      const companyId = await getCompanyId();
 
       const { data: pr, error: fetchError } = await supabase!
         .from('procurement_requests')
@@ -1095,8 +979,7 @@ export const db = {
       return mockDb.addDamageReport(report);
     }
     try {
-      const { data: companyData } = await supabase!.from('companies').select('id').limit(1).single();
-      const companyId = companyData?.id;
+      const companyId = await getCompanyId();
 
       const { data, error } = await supabase!
         .from('damage_reports')
@@ -1115,7 +998,8 @@ export const db = {
         .eq('id', report.equipment_id);
 
       return data as DamageReport;
-    } catch (e) {
+    } catch (e: any) {
+      if (useSupabase()) throw e;
       console.warn('Supabase addDamageReport failed, using mock database:', e);
       return mockDb.addDamageReport(report);
     }
@@ -1196,10 +1080,10 @@ export const db = {
 
           const { data: wms } = await supabase!.from('users').select('id').eq('role', 'warehouse_manager');
           if (wms) {
-            const { data: companyData } = await supabase!.from('companies').select('id').limit(1).single();
+            const companyId = await getCompanyId();
             const { data: eqCode } = await supabase!.from('equipment').select('asset_code').eq('id', eqId).single();
             const inserts = wms.map((wm: any) => ({
-              company_id: companyData?.id,
+              company_id: companyId,
               user_id: wm.id,
               title: 'Asset Written Off',
               message: `Asset ${eqCode?.asset_code || '—'} written off by CFO. Damage report #${id} closed.`,
@@ -1210,7 +1094,8 @@ export const db = {
           }
         }
       }
-    } catch (e) {
+    } catch (e: any) {
+      if (useSupabase()) throw e;
       console.warn('Supabase updateDamageReportStatus failed, using mock database:', e);
       return mockDb.updateDamageReportStatus(id, status, data);
     }

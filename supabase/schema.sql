@@ -260,17 +260,21 @@ CREATE POLICY categories_write_wm_cfo ON equipment_categories
 CREATE POLICY equipment_select ON equipment
   FOR SELECT USING (company_id = get_current_user_company());
 
-CREATE POLICY equipment_write_wm_cfo ON equipment
-  FOR ALL USING (get_current_user_role() IN ('warehouse_manager', 'cfo'))
-  WITH CHECK (get_current_user_role() IN ('warehouse_manager', 'cfo'));
+CREATE POLICY equipment_insert_wm_cfo ON equipment
+  FOR INSERT WITH CHECK (company_id = get_current_user_company() AND get_current_user_role() IN ('warehouse_manager', 'cfo'));
+
+CREATE POLICY equipment_update_wm_cfo ON equipment
+  FOR UPDATE USING (company_id = get_current_user_company() AND get_current_user_role() IN ('warehouse_manager', 'cfo'));
 
 -- RLS: Consumable Stock
 CREATE POLICY consumables_select ON consumable_stock
   FOR SELECT USING (company_id = get_current_user_company());
 
-CREATE POLICY consumables_write_wm_cfo ON consumable_stock
-  FOR ALL USING (get_current_user_role() IN ('warehouse_manager', 'cfo'))
-  WITH CHECK (get_current_user_role() IN ('warehouse_manager', 'cfo'));
+CREATE POLICY consumables_insert_wm_cfo ON consumable_stock
+  FOR INSERT WITH CHECK (company_id = get_current_user_company() AND get_current_user_role() IN ('warehouse_manager', 'cfo'));
+
+CREATE POLICY consumables_update_wm_cfo ON consumable_stock
+  FOR UPDATE USING (company_id = get_current_user_company() AND get_current_user_role() IN ('warehouse_manager', 'cfo'));
 
 -- RLS: Requests
 CREATE POLICY requests_select_all_wm_cfo ON requests
@@ -298,6 +302,14 @@ CREATE POLICY requests_update_approver_wm ON requests
     (
       (get_current_user_role() = 'warehouse_manager' AND routed_to = 'warehouse_manager') OR
       (get_current_user_role() = 'cfo')
+    )
+  )
+  WITH CHECK (
+    (get_current_user_role() = 'cfo') OR 
+    (
+      requested_by = (SELECT r.requested_by FROM requests r WHERE r.id = id) AND
+      company_id = (SELECT r.company_id FROM requests r WHERE r.id = id) AND
+      project_name = (SELECT r.project_name FROM requests r WHERE r.id = id)
     )
   );
 
@@ -347,6 +359,11 @@ CREATE POLICY procurement_update_status_wm ON procurement_requests
   FOR UPDATE USING (
     company_id = get_current_user_company() AND
     get_current_user_role() = 'warehouse_manager'
+  )
+  WITH CHECK (
+    estimated_cost_ugx = (SELECT p.estimated_cost_ugx FROM procurement_requests p WHERE p.id = id) AND
+    created_by = (SELECT p.created_by FROM procurement_requests p WHERE p.id = id) AND
+    company_id = (SELECT p.company_id FROM procurement_requests p WHERE p.id = id)
   );
 
 -- 5. INITIAL SEEDING HELPERS
@@ -392,7 +409,10 @@ CREATE POLICY notifications_update ON notifications
   FOR UPDATE USING (company_id = get_current_user_company() AND user_id = auth.uid());
 
 CREATE POLICY notifications_insert ON notifications
-  FOR INSERT WITH CHECK (company_id = get_current_user_company());
+  FOR INSERT WITH CHECK (
+    company_id = get_current_user_company() AND
+    get_current_user_role() IN ('warehouse_manager', 'cfo')
+  );
 
 
 -- 7. PHASE TWO ADDITIONS
@@ -616,5 +636,416 @@ ALTER TABLE report_exports ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY report_exports_cfo ON report_exports
   FOR ALL USING (company_id = get_current_user_company() AND get_current_user_role() = 'cfo');
+
+
+-- 8. TRANSACTIONAL SECURITY DEFINER RPC FUNCTIONS
+
+-- RPC 1: Create request with atomic line item verification and threshold routing
+CREATE OR REPLACE FUNCTION rpc_create_request(
+  p_project_name TEXT,
+  p_site_location TEXT,
+  p_needed_from TIMESTAMPTZ,
+  p_needed_until TIMESTAMPTZ,
+  p_items JSONB
+)
+RETURNS UUID AS $$
+DECLARE
+  v_company_id UUID;
+  v_user_role user_role;
+  v_threshold NUMERIC;
+  v_routes_to_cfo BOOLEAN := false;
+  v_request_id UUID;
+  v_item JSONB;
+  v_eq_val NUMERIC;
+  v_eq_name TEXT;
+  v_eq_status equipment_status;
+  v_eq_count INT;
+  v_con_val NUMERIC;
+  v_con_qty NUMERIC;
+  v_qty_req INT;
+  v_eq_id UUID;
+  v_con_id UUID;
+BEGIN
+  -- Resolve company and role
+  v_company_id := get_current_user_company();
+  v_user_role := get_current_user_role();
+
+  IF v_company_id IS NULL THEN
+    RAISE EXCEPTION 'Unauthorized: User session company not found.';
+  END IF;
+
+  -- Load threshold limit from settings
+  SELECT COALESCE(approval_threshold_ugx, 500000)
+  INTO v_threshold
+  FROM settings
+  WHERE company_id = v_company_id;
+
+  IF NOT FOUND THEN
+    v_threshold := 500000;
+  END IF;
+
+  -- Validate and inspect each item in json array to decide routing
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+    v_eq_id := (v_item->>'equipment_id')::UUID;
+    v_con_id := (v_item->>'consumable_id')::UUID;
+    v_qty_req := (v_item->>'quantity_requested')::INT;
+
+    IF v_eq_id IS NOT NULL THEN
+      SELECT unit_value_ugx, name, status
+      INTO v_eq_val, v_eq_name, v_eq_status
+      FROM equipment
+      WHERE id = v_eq_id AND company_id = v_company_id;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'Equipment unit not found.';
+      END IF;
+
+      IF v_eq_status != 'available' THEN
+        RAISE EXCEPTION 'Equipment unit % is not available.', v_eq_name;
+      END IF;
+
+      IF v_eq_val >= v_threshold THEN
+        v_routes_to_cfo := true;
+      END IF;
+
+      -- Check remaining available stock of same name
+      SELECT COUNT(*)
+      INTO v_eq_count
+      FROM equipment
+      WHERE name = v_eq_name AND status = 'available' AND company_id = v_company_id;
+
+      IF v_eq_count <= 1 THEN
+        v_routes_to_cfo := true;
+      END IF;
+
+    ELSIF v_con_id IS NOT NULL THEN
+      SELECT unit_value_ugx, quantity_on_hand
+      INTO v_con_val, v_con_qty
+      FROM consumable_stock
+      WHERE id = v_con_id AND company_id = v_company_id;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'Consumable SKU not found.';
+      END IF;
+
+      IF v_con_qty < v_qty_req THEN
+        RAISE EXCEPTION 'Insufficient stock for consumable SKU.';
+      END IF;
+
+      -- Check leaves at least 1 unit remaining
+      IF v_con_val >= v_threshold OR v_con_qty - v_qty_req < 1 THEN
+        v_routes_to_cfo := true;
+      END IF;
+    END IF;
+  END LOOP;
+
+  -- Create request row
+  INSERT INTO requests (
+    company_id,
+    requested_by,
+    project_name,
+    site_location,
+    needed_from,
+    needed_until,
+    status,
+    routed_to
+  ) VALUES (
+    v_company_id,
+    auth.uid(),
+    p_project_name,
+    p_site_location,
+    p_needed_from,
+    p_needed_until,
+    'pending',
+    CASE WHEN v_routes_to_cfo THEN 'cfo'::routed_role ELSE 'warehouse_manager'::routed_role END
+  )
+  RETURNING id INTO v_request_id;
+
+  -- Create item mappings
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+    v_eq_id := (v_item->>'equipment_id')::UUID;
+    v_con_id := (v_item->>'consumable_id')::UUID;
+    v_qty_req := (v_item->>'quantity_requested')::INT;
+
+    INSERT INTO request_items (
+      request_id,
+      equipment_id,
+      consumable_id,
+      quantity_requested
+    ) VALUES (
+      v_request_id,
+      v_eq_id,
+      v_con_id,
+      v_qty_req
+    );
+  END LOOP;
+
+  RETURN v_request_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
+-- RPC 2: Atomic checkout request processing with stock decrement
+CREATE OR REPLACE FUNCTION rpc_checkout_request(
+  p_request_id UUID,
+  p_entry_method entry_method DEFAULT 'manual'
+)
+RETURNS VOID AS $$
+DECLARE
+  v_company_id UUID;
+  v_user_role user_role;
+  v_site_location TEXT;
+  v_requested_by UUID;
+  v_project_name TEXT;
+  v_item RECORD;
+  v_current_stock NUMERIC;
+BEGIN
+  -- Resolve company and role
+  v_company_id := get_current_user_company();
+  v_user_role := get_current_user_role();
+
+  IF v_user_role IS NULL OR v_user_role NOT IN ('warehouse_manager', 'cfo') THEN
+    RAISE EXCEPTION 'Unauthorized: Only warehouse managers and CFOs can process checkouts.';
+  END IF;
+
+  -- Fetch request details and check company ownership
+  SELECT site_location, requested_by, project_name
+  INTO v_site_location, v_requested_by, v_project_name
+  FROM requests
+  WHERE id = p_request_id AND company_id = v_company_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Request not found or unauthorized.';
+  END IF;
+
+  -- Process each line item
+  FOR v_item IN 
+    SELECT equipment_id, consumable_id, quantity_requested 
+    FROM request_items 
+    WHERE request_id = p_request_id
+  LOOP
+    IF v_item.equipment_id IS NOT NULL THEN
+      -- Reusable item
+      UPDATE equipment
+      SET status = 'checked_out',
+          current_location = COALESCE(v_site_location, 'Field Site')
+      WHERE id = v_item.equipment_id AND company_id = v_company_id AND status = 'available';
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'Equipment unit not available or unauthorized.';
+      END IF;
+
+      -- Log transaction
+      INSERT INTO transactions (
+        company_id,
+        transaction_type,
+        equipment_id,
+        request_id,
+        quantity,
+        performed_by,
+        counterparty,
+        notes,
+        entry_method
+      ) VALUES (
+        v_company_id,
+        'checkout',
+        v_item.equipment_id,
+        p_request_id,
+        1,
+        auth.uid(),
+        v_requested_by,
+        'Checked out for project: ' || v_project_name,
+        p_entry_method
+      );
+
+    ELSIF v_item.consumable_id IS NOT NULL THEN
+      -- Consumable item (with row lock on stock)
+      SELECT quantity_on_hand INTO v_current_stock
+      FROM consumable_stock
+      WHERE id = v_item.consumable_id AND company_id = v_company_id
+      FOR UPDATE;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'Consumable SKU not found or unauthorized.';
+      END IF;
+
+      IF v_current_stock < v_item.quantity_requested THEN
+        RAISE EXCEPTION 'Insufficient stock for consumable SKU.';
+      END IF;
+
+      -- Decrement stock
+      UPDATE consumable_stock
+      SET quantity_on_hand = v_current_stock - v_item.quantity_requested
+      WHERE id = v_item.consumable_id;
+
+      -- Log transaction
+      INSERT INTO transactions (
+        company_id,
+        transaction_type,
+        consumable_id,
+        request_id,
+        quantity,
+        performed_by,
+        counterparty,
+        notes,
+        entry_method
+      ) VALUES (
+        v_company_id,
+        'stock_consumed',
+        v_item.consumable_id,
+        p_request_id,
+        v_item.quantity_requested,
+        auth.uid(),
+        v_requested_by,
+        'Consumed for project: ' || v_project_name,
+        p_entry_method
+      );
+    END IF;
+  END LOOP;
+
+  -- Mark request as fulfilled
+  UPDATE requests
+  SET status = 'fulfilled'
+  WHERE id = p_request_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
+-- RPC 3: Return request item with damage report auto-generation
+CREATE OR REPLACE FUNCTION rpc_return_request_item(
+  p_request_id UUID,
+  p_equipment_id UUID,
+  p_condition condition_type,
+  p_notes TEXT,
+  p_entry_method entry_method DEFAULT 'manual'
+)
+RETURNS VOID AS $$
+DECLARE
+  v_company_id UUID;
+  v_user_role user_role;
+  v_requested_by UUID;
+  v_eq_status equipment_status;
+  v_eq_loc TEXT;
+  v_updated_notes TEXT;
+  v_tx_id UUID;
+  v_dr_id UUID;
+  v_remaining_checked_out INT;
+BEGIN
+  -- Resolve company and role
+  v_company_id := get_current_user_company();
+  v_user_role := get_current_user_role();
+
+  IF v_user_role IS NULL OR v_user_role NOT IN ('warehouse_manager', 'cfo') THEN
+    RAISE EXCEPTION 'Unauthorized: Only warehouse managers and CFOs can process returns.';
+  END IF;
+
+  -- Fetch request details and check company ownership
+  SELECT requested_by INTO v_requested_by
+  FROM requests
+  WHERE id = p_request_id AND company_id = v_company_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Request not found or unauthorized.';
+  END IF;
+
+  -- Verify equipment status and lock it
+  SELECT status INTO v_eq_status
+  FROM equipment
+  WHERE id = p_equipment_id AND company_id = v_company_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Equipment item not found or unauthorized.';
+  END IF;
+
+  IF v_eq_status NOT IN ('checked_out', 'overdue') THEN
+    RAISE EXCEPTION 'Equipment unit is not currently checked out.';
+  END IF;
+
+  -- Set status and location based on condition
+  IF p_condition = 'good' THEN
+    v_eq_status := 'available';
+    v_eq_loc := 'Kampala Central Warehouse';
+  ELSE
+    v_eq_status := 'under_repair';
+    v_eq_loc := 'Repair Bay';
+  END IF;
+
+  v_updated_notes := COALESCE(p_notes, '') || ' (Logged during return as ' || p_condition::text || ')';
+
+  -- Update equipment
+  UPDATE equipment
+  SET status = v_eq_status,
+      current_location = v_eq_loc,
+      condition_notes = v_updated_notes
+  WHERE id = p_equipment_id;
+
+  -- Log return transaction
+  INSERT INTO transactions (
+    company_id,
+    transaction_type,
+    equipment_id,
+    request_id,
+    quantity,
+    performed_by,
+    counterparty,
+    condition_at_event,
+    notes,
+    entry_method
+  ) VALUES (
+    v_company_id,
+    'return',
+    p_equipment_id,
+    p_request_id,
+    1,
+    auth.uid(),
+    v_requested_by,
+    p_condition,
+    COALESCE(p_notes, 'Returned condition: ' || p_condition::text),
+    p_entry_method
+  )
+  RETURNING id INTO v_tx_id;
+
+  -- Auto-create damage report if condition is not good
+  IF p_condition != 'good' THEN
+    INSERT INTO damage_reports (
+      company_id,
+      equipment_id,
+      originating_transaction_id,
+      reported_by,
+      reported_at,
+      damage_description,
+      status
+    ) VALUES (
+      v_company_id,
+      p_equipment_id,
+      v_tx_id,
+      auth.uid(),
+      now(),
+      COALESCE(p_notes, 'Logged return condition: ' || p_condition::text),
+      'open'
+    )
+    RETURNING id INTO v_dr_id;
+
+    -- Link damage report to equipment
+    UPDATE equipment
+    SET damage_report_id = v_dr_id
+    WHERE id = p_equipment_id;
+  END IF;
+
+  -- Check if all reusable items in this request have been returned
+  SELECT COUNT(*) INTO v_remaining_checked_out
+  FROM request_items ri
+  JOIN equipment e ON e.id = ri.equipment_id
+  WHERE ri.request_id = p_request_id 
+    AND e.status = 'checked_out';
+
+  IF v_remaining_checked_out = 0 THEN
+    UPDATE requests
+    SET status = 'returned'
+    WHERE id = p_request_id;
+  END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 
