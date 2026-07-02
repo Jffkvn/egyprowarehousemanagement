@@ -4,9 +4,10 @@ import React, { useState, useEffect } from 'react';
 import { db, CashAdvance, RetirementEntry, User } from '@/lib/db';
 import { Coins, DollarSign, Clock, CheckCircle, XCircle, Plus, FileText, ArrowLeft, AlertTriangle, Eye, Download, User as UserIcon, Calendar, Check, ExternalLink } from 'lucide-react';
 import { StatusBadge } from '@/components/dashboard/PMDashboard';
+import { useAuth } from '@/context/AuthContext';
 
 export default function AdvancesPage() {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const { user: currentUser, loading: authLoading } = useAuth();
   const [advances, setAdvances] = useState<CashAdvance[]>([]);
   const [selectedAdvance, setSelectedAdvance] = useState<CashAdvance | null>(null);
   const [retirementEntries, setRetirementEntries] = useState<RetirementEntry[]>([]);
@@ -62,20 +63,10 @@ export default function AdvancesPage() {
     };
     triggerCheck();
 
-    // Fetch user profile from storage/auth
-    if (typeof window !== 'undefined') {
-      const stored = localStorage.getItem('equip_track_active_user');
-      if (stored) {
-        try {
-          const parsed = JSON.parse(stored);
-          setCurrentUser(parsed);
-          fetchAdvances(parsed);
-        } catch (e) {
-          console.error(e);
-        }
-      }
+    if (currentUser) {
+      fetchAdvances(currentUser);
     }
-  }, []);
+  }, [currentUser]);
 
   const fetchAdvances = async (user: User) => {
     setIsLoading(true);
@@ -283,10 +274,19 @@ export default function AdvancesPage() {
     return '90+ days';
   };
 
+  if (authLoading || (isLoading && advances.length === 0)) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen text-slate-100 bg-slate-950">
+        <div className="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+        <p className="text-md text-slate-400 mt-4">Loading accountability console...</p>
+      </div>
+    );
+  }
+
   if (!currentUser) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen text-white bg-slate-900">
-        <p className="text-lg text-slate-400">Loading accountability console...</p>
+      <div className="flex flex-col items-center justify-center min-h-screen text-slate-100 bg-slate-950">
+        <p className="text-md text-slate-400">Please log in to view this page.</p>
       </div>
     );
   }

@@ -102,6 +102,12 @@ export default function Shell({ children }: ShellProps) {
 
   const navItems = [
     {
+      name: 'Cash Advances',
+      href: '/advances',
+      icon: Coins,
+      roles: ['pm', 'cfo']
+    },
+    {
       name: 'Dashboard',
       href: '/dashboard',
       icon: LayoutDashboard,
@@ -142,12 +148,6 @@ export default function Shell({ children }: ShellProps) {
       href: '/transactions',
       icon: History,
       roles: ['warehouse_manager', 'cfo']
-    },
-    {
-      name: 'Cash Advances',
-      href: '/advances',
-      icon: Coins,
-      roles: ['pm', 'cfo']
     },
     {
       name: 'Reports',
