@@ -17,7 +17,8 @@ import {
   ShoppingBag,
   History,
   RotateCcw,
-  CheckCircle2
+  CheckCircle2,
+  Clock
 } from 'lucide-react';
 
 interface PageProps {
@@ -224,6 +225,13 @@ export default function RequestDetailPage({ params }: PageProps) {
             </span>
           </div>
         </div>
+
+      {request.status === 'pending' && (
+        <div className="mx-6 mt-4 p-3 bg-warning-tint border border-warning/20 text-warning rounded-md text-xs font-semibold flex items-center space-x-2">
+          <Clock size={16} />
+          <span>Currently awaiting review by: <strong className="text-navy">{request.routed_to === 'cfo' ? 'CFO (High-Value / Low-Stock routing)' : 'Warehouse Manager'}</strong></span>
+        </div>
+      )}
 
         {/* Card Body */}
         <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-6">

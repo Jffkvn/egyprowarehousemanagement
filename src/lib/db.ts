@@ -2,9 +2,9 @@
 // Delegates queries to Supabase if configured, or falls back to Mock LocalStorage.
 
 import { supabase } from './supabaseClient';
-import { mockDb, User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification } from './mockDb';
+import { mockDb, User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport } from './mockDb';
 
-export type { User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification };
+export type { User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport };
 
 // Helper to determine if we should use Supabase or fallback to mock
 const useSupabase = () => {
@@ -73,37 +73,31 @@ export const db = {
     }
   },
 
-  addUser: async (user: Omit<User, 'id' | 'company_id' | 'is_active' | 'created_at'>): Promise<User> => {
+  addUser: async (user: Omit<User, 'id' | 'company_id' | 'is_active' | 'created_at'> & { password?: string }): Promise<User> => {
     if (!useSupabase()) {
       return mockDb.addUser(user);
     }
     try {
-      // Create user in the database users table.
-      // Note: In Supabase, the CFO creates a user by first registering them in Auth (e.g. via edge functions or client-side SignUp),
-      // and then inserting into the users table. For simplicity in Phase One client, we insert a record.
-      // We generate a UUID since auth.users is managed by Supabase.
-      const { data: companyData } = await supabase!.from('companies').select('id').limit(1).single();
-      const companyId = companyData?.id;
-
-      const newUser = {
-        id: crypto.randomUUID(),
-        company_id: companyId,
-        full_name: user.full_name,
-        email: user.email,
-        role: user.role,
-        phone: user.phone || null,
-        is_active: true
-      };
-
-      const { data, error } = await supabase!
-        .from('users')
-        .insert(newUser)
-        .select()
-        .single();
-      if (error) throw error;
-      return data as User;
+      const res = await fetch('/api/admin/create-user', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          email: user.email,
+          password: user.password || 'password123',
+          full_name: user.full_name,
+          role: user.role,
+          phone: user.phone || null
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to create user');
+      }
+      return data.user as User;
     } catch (e) {
-      console.warn('Supabase addUser failed, using mock database:', e);
+      console.warn('Supabase addUser via API failed, using mock database:', e);
       return mockDb.addUser(user);
     }
   },
@@ -550,9 +544,9 @@ export const db = {
     }
   },
 
-  checkoutRequest: async (requestId: string, performedBy: string): Promise<Request> => {
+  checkoutRequest: async (requestId: string, performedBy: string, entryMethod: 'manual' | 'grn' | 'qr_scan' = 'manual'): Promise<Request> => {
     if (!useSupabase()) {
-      return mockDb.checkoutRequest(requestId, performedBy);
+      return mockDb.checkoutRequest(requestId, performedBy, entryMethod);
     }
     try {
       // 1. Fetch request details and items
@@ -580,7 +574,7 @@ export const db = {
             performed_by: performedBy,
             counterparty: req.requested_by,
             notes: `Checked out for project: ${req.project_name}`,
-            entry_method: 'manual'
+            entry_method: entryMethod
           });
         } else if (item.consumable_id) {
           // Consumable - Decrement stock quantity
@@ -602,7 +596,7 @@ export const db = {
               performed_by: performedBy,
               counterparty: req.requested_by,
               notes: `Consumed for project: ${req.project_name}`,
-              entry_method: 'manual'
+              entry_method: entryMethod
             });
           }
         }
@@ -620,7 +614,7 @@ export const db = {
       return data as Request;
     } catch (e) {
       console.warn('Supabase checkoutRequest failed, using mock database:', e);
-      return mockDb.checkoutRequest(requestId, performedBy);
+      return mockDb.checkoutRequest(requestId, performedBy, entryMethod);
     }
   },
 
@@ -629,10 +623,11 @@ export const db = {
     equipmentId: string,
     condition: 'good' | 'damaged' | 'missing_parts' | 'non_functional',
     notes: string,
-    performedBy: string
+    performedBy: string,
+    entryMethod: 'manual' | 'grn' | 'qr_scan' = 'manual'
   ): Promise<void> => {
     if (!useSupabase()) {
-      return mockDb.returnRequestItem(requestId, equipmentId, condition, notes, performedBy);
+      return mockDb.returnRequestItem(requestId, equipmentId, condition, notes, performedBy, entryMethod);
     }
     try {
       const { data: req } = await supabase!.from('requests').select('*').eq('id', requestId).single();
@@ -665,7 +660,7 @@ export const db = {
         counterparty: req.requested_by,
         condition_at_event: condition,
         notes: notes || `Returned condition: ${condition}`,
-        entry_method: 'manual'
+        entry_method: entryMethod
       });
 
       // Check if all reusable items in this request have been returned
@@ -687,7 +682,7 @@ export const db = {
       }
     } catch (e) {
       console.warn('Supabase returnRequestItem failed, using mock database:', e);
-      return mockDb.returnRequestItem(requestId, equipmentId, condition, notes, performedBy);
+      return mockDb.returnRequestItem(requestId, equipmentId, condition, notes, performedBy, entryMethod);
     }
   },
 
@@ -1039,6 +1034,441 @@ export const db = {
     } catch (e) {
       console.warn('Supabase markAllNotificationsAsRead failed, using mock database:', e);
       return mockDb.markAllNotificationsAsRead(userId);
+    }
+  },
+
+  createNotification: async (companyId: string, userId: string, title: string, message: string, link: string): Promise<Notification> => {
+    if (!useSupabase()) {
+      return mockDb.createNotification(companyId, userId, title, message, link);
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('notifications')
+        .insert([{
+          company_id: companyId,
+          user_id: userId,
+          title,
+          message,
+          link,
+          is_read: false
+        }])
+        .select()
+        .single();
+      if (error) throw error;
+      return data as Notification;
+    } catch (e) {
+      console.warn('Supabase createNotification failed, using mock database:', e);
+      return mockDb.createNotification(companyId, userId, title, message, link);
+    }
+  },
+
+  getDamageReports: async (): Promise<DamageReport[]> => {
+    if (!useSupabase()) {
+      return mockDb.getDamageReports();
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('damage_reports')
+        .select(`
+          *,
+          equipment:equipment_id (name, asset_code),
+          reporter:reported_by (full_name),
+          resolver:resolved_by (full_name)
+        `)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      return (data || []).map((dr: any) => ({
+        ...dr,
+        equipment_name: dr.equipment?.name,
+        equipment_asset_code: dr.equipment?.asset_code,
+        reported_by_name: dr.reporter?.full_name,
+        resolved_by_name: dr.resolver?.full_name
+      })) as DamageReport[];
+    } catch (e) {
+      console.warn('Supabase getDamageReports failed, using mock database:', e);
+      return mockDb.getDamageReports();
+    }
+  },
+
+  addDamageReport: async (report: Omit<DamageReport, 'id' | 'company_id' | 'reported_at' | 'status' | 'created_at'>): Promise<DamageReport> => {
+    if (!useSupabase()) {
+      return mockDb.addDamageReport(report);
+    }
+    try {
+      const { data: companyData } = await supabase!.from('companies').select('id').limit(1).single();
+      const companyId = companyData?.id;
+
+      const { data, error } = await supabase!
+        .from('damage_reports')
+        .insert([{
+          ...report,
+          company_id: companyId,
+          status: 'open'
+        }])
+        .select()
+        .single();
+      if (error) throw error;
+
+      await supabase!
+        .from('equipment')
+        .update({ damage_report_id: data.id })
+        .eq('id', report.equipment_id);
+
+      return data as DamageReport;
+    } catch (e) {
+      console.warn('Supabase addDamageReport failed, using mock database:', e);
+      return mockDb.addDamageReport(report);
+    }
+  },
+
+  updateDamageReportStatus: async (
+    id: string,
+    status: 'open' | 'under_repair' | 'resolved' | 'written_off',
+    data: {
+      estimated_repair_cost_ugx?: number;
+      actual_repair_cost_ugx?: number;
+      vendor_name?: string;
+      resolved_by?: string;
+      resolution_notes?: string;
+      photos?: string[];
+    }
+  ): Promise<void> => {
+    if (!useSupabase()) {
+      return mockDb.updateDamageReportStatus(id, status, data);
+    }
+    try {
+      const updates: any = { status };
+      if (data.estimated_repair_cost_ugx !== undefined) updates.estimated_repair_cost_ugx = data.estimated_repair_cost_ugx;
+      if (data.actual_repair_cost_ugx !== undefined) updates.actual_repair_cost_ugx = data.actual_repair_cost_ugx;
+      if (data.vendor_name !== undefined) updates.vendor_name = data.vendor_name;
+      if (data.resolution_notes !== undefined) updates.resolution_notes = data.resolution_notes;
+      if (data.photos !== undefined) updates.photos = data.photos;
+
+      if (status === 'resolved' || status === 'written_off') {
+        updates.resolved_at = new Date().toISOString();
+        updates.resolved_by = data.resolved_by;
+      }
+
+      const { error } = await supabase!
+        .from('damage_reports')
+        .update(updates)
+        .eq('id', id);
+      if (error) throw error;
+
+      const { data: drData } = await supabase!
+        .from('damage_reports')
+        .select('equipment_id, reported_by')
+        .eq('id', id)
+        .single();
+
+      if (drData) {
+        const eqId = drData.equipment_id;
+        if (status === 'under_repair') {
+          await supabase!.from('equipment').update({ status: 'under_repair', current_location: 'Repair Bay' }).eq('id', eqId);
+          await supabase!.from('transactions').insert([{
+            transaction_type: 'sent_for_repair',
+            equipment_id: eqId,
+            quantity: 1,
+            performed_by: data.resolved_by || drData.reported_by,
+            notes: `Sent to vendor: ${data.vendor_name || 'Generic Vendor'}`,
+            entry_method: 'manual'
+          }]);
+        } else if (status === 'resolved') {
+          await supabase!.from('equipment').update({ status: 'available', current_location: 'Kampala Central Warehouse', damage_report_id: null }).eq('id', eqId);
+          await supabase!.from('transactions').insert([{
+            transaction_type: 'returned_from_repair',
+            equipment_id: eqId,
+            quantity: 1,
+            performed_by: data.resolved_by,
+            notes: `Repaired. Cost: ${data.actual_repair_cost_ugx || 0} UGX. Notes: ${data.resolution_notes || ''}`,
+            entry_method: 'manual'
+          }]);
+        } else if (status === 'written_off') {
+          await supabase!.from('equipment').update({ status: 'retired', damage_report_id: null }).eq('id', eqId);
+          await supabase!.from('transactions').insert([{
+            transaction_type: 'retired',
+            equipment_id: eqId,
+            quantity: 1,
+            performed_by: data.resolved_by,
+            notes: `Written off - uneconomical to repair. Damage report #${id}`,
+            entry_method: 'manual'
+          }]);
+
+          const { data: wms } = await supabase!.from('users').select('id').eq('role', 'warehouse_manager');
+          if (wms) {
+            const { data: companyData } = await supabase!.from('companies').select('id').limit(1).single();
+            const { data: eqCode } = await supabase!.from('equipment').select('asset_code').eq('id', eqId).single();
+            const inserts = wms.map((wm: any) => ({
+              company_id: companyData?.id,
+              user_id: wm.id,
+              title: 'Asset Written Off',
+              message: `Asset ${eqCode?.asset_code || '—'} written off by CFO. Damage report #${id} closed.`,
+              link: '/damage-reports',
+              is_read: false
+            }));
+            await supabase!.from('notifications').insert(inserts);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Supabase updateDamageReportStatus failed, using mock database:', e);
+      return mockDb.updateDamageReportStatus(id, status, data);
+    }
+  },
+
+  getGRNDocuments: async (): Promise<GrnDocument[]> => {
+    if (!useSupabase()) {
+      return mockDb.getGRNDocuments();
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('grn_documents')
+        .select(`
+          *,
+          receiver:received_by (full_name),
+          items:grn_items (quantity_received, unit_value_ugx)
+        `)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+
+      return (data || []).map((doc: any) => {
+        const count = doc.items?.length || 0;
+        const total = doc.items?.reduce((sum: number, it: any) => sum + (parseFloat(it.quantity_received) * parseFloat(it.unit_value_ugx)), 0) || 0;
+        return {
+          ...doc,
+          received_by_name: doc.receiver?.full_name,
+          items_count: count,
+          total_value: total
+        };
+      }) as GrnDocument[];
+    } catch (e) {
+      console.warn('Supabase getGRNDocuments failed, using mock database:', e);
+      return mockDb.getGRNDocuments();
+    }
+  },
+
+  getGRNItems: async (grnId: string): Promise<GrnItem[]> => {
+    if (!useSupabase()) {
+      return mockDb.getGRNItems(grnId);
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('grn_items')
+        .select(`
+          *,
+          equipment:equipment_id (name, asset_code),
+          consumable:consumable_id (name, sku_code)
+        `)
+        .eq('grn_id', grnId);
+      if (error) throw error;
+
+      return (data || []).map((it: any) => ({
+        ...it,
+        item_name: it.equipment?.name || it.consumable?.name || '',
+        item_code: it.equipment?.asset_code || it.consumable?.sku_code || '—'
+      })) as GrnItem[];
+    } catch (e) {
+      console.warn('Supabase getGRNItems failed, using mock database:', e);
+      return mockDb.getGRNItems(grnId);
+    }
+  },
+
+  createGRNDocument: async (
+    doc: Omit<GrnDocument, 'id' | 'company_id' | 'grn_number' | 'created_at'>,
+    items: Array<{
+      item_type: 'reusable' | 'consumable';
+      category_id: string;
+      name: string;
+      quantity_received: number;
+      unit_value_ugx: number;
+      condition_on_arrival: 'good' | 'damaged' | 'pending_inspection';
+      notes?: string;
+    }>
+  ): Promise<GrnDocument> => {
+    if (!useSupabase()) {
+      return mockDb.createGRNDocument(doc, items);
+    }
+    return mockDb.createGRNDocument(doc, items);
+  },
+
+  getNotificationChannels: async (): Promise<NotificationChannel[]> => {
+    if (!useSupabase()) {
+      return mockDb.getNotificationChannels();
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('notification_channels')
+        .select('*');
+      if (error) throw error;
+      return data as NotificationChannel[];
+    } catch (e) {
+      console.warn('Supabase getNotificationChannels failed, using mock database:', e);
+      return mockDb.getNotificationChannels();
+    }
+  },
+
+  saveNotificationChannel: async (channel: Omit<NotificationChannel, 'id' | 'updated_at'>): Promise<void> => {
+    if (!useSupabase()) {
+      return mockDb.saveNotificationChannel(channel);
+    }
+    try {
+      const { error } = await supabase!
+        .from('notification_channels')
+        .upsert({
+          user_id: channel.user_id,
+          whatsapp_number: channel.whatsapp_number,
+          email_enabled: channel.email_enabled,
+          preferred_channel: channel.preferred_channel,
+          is_active: channel.is_active,
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'user_id' });
+      if (error) throw error;
+    } catch (e) {
+      console.warn('Supabase saveNotificationChannel failed, using mock database:', e);
+      return mockDb.saveNotificationChannel(channel);
+    }
+  },
+
+  getQrLabelByCode: async (code: string): Promise<QrLabel | null> => {
+    if (!useSupabase()) {
+      return mockDb.getQrLabelByCode(code);
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('qr_labels')
+        .select('*')
+        .eq('label_code', code)
+        .maybeSingle();
+      if (error) throw error;
+      return data as QrLabel | null;
+    } catch (e) {
+      console.warn('Supabase getQrLabelByCode failed, using mock database:', e);
+      return mockDb.getQrLabelByCode(code);
+    }
+  },
+
+  generateQrLabel: async (target: { equipment_id?: string; consumable_id?: string; company_id: string; generated_by: string }): Promise<QrLabel> => {
+    if (!useSupabase()) {
+      return mockDb.generateQrLabel(target);
+    }
+    try {
+      const label_code = target.equipment_id ? `EQPT:${target.equipment_id}` : `CONS:${target.consumable_id}`;
+      // Check if it already exists to prevent duplicate insertion
+      const { data: existing } = await supabase!
+        .from('qr_labels')
+        .select('*')
+        .eq('label_code', label_code)
+        .maybeSingle();
+      
+      if (existing) return existing as QrLabel;
+
+      const { data: newLabel, error } = await supabase!
+        .from('qr_labels')
+        .insert([{
+          company_id: target.company_id,
+          equipment_id: target.equipment_id,
+          consumable_id: target.consumable_id,
+          label_code,
+          generated_by: target.generated_by
+        }])
+        .select()
+        .single();
+      
+      if (error) throw error;
+
+      // Update equipment/consumable table reference
+      if (target.equipment_id) {
+        await supabase!
+          .from('equipment')
+          .update({ qr_label_id: newLabel.id })
+          .eq('id', target.equipment_id);
+      } else if (target.consumable_id) {
+        await supabase!
+          .from('consumable_stock')
+          .update({ qr_label_id: newLabel.id })
+          .eq('id', target.consumable_id);
+      }
+
+      return newLabel as QrLabel;
+    } catch (e) {
+      console.warn('Supabase generateQrLabel failed, using mock database:', e);
+      return mockDb.generateQrLabel(target);
+    }
+  },
+
+  markQrLabelPrinted: async (labelId: string): Promise<void> => {
+    if (!useSupabase()) {
+      return mockDb.markQrLabelPrinted(labelId);
+    }
+    try {
+      const { error } = await supabase!
+        .from('qr_labels')
+        .update({ printed_at: new Date().toISOString() })
+        .eq('id', labelId);
+      if (error) throw error;
+    } catch (e) {
+      console.warn('Supabase markQrLabelPrinted failed, using mock database:', e);
+      return mockDb.markQrLabelPrinted(labelId);
+    }
+  },
+
+  getReportExports: async (): Promise<ReportExport[]> => {
+    if (!useSupabase()) {
+      return mockDb.getReportExports();
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('report_exports')
+        .select(`
+          *,
+          generated_by_user:users!report_exports_generated_by_fkey (full_name)
+        `)
+        .order('generated_at', { ascending: false });
+      
+      if (error) throw error;
+
+      return data.map((re: any) => ({
+        ...re,
+        generated_by_name: re.generated_by_user ? re.generated_by_user.full_name : 'System'
+      })) as ReportExport[];
+    } catch (e) {
+      console.warn('Supabase getReportExports failed, using mock database:', e);
+      return mockDb.getReportExports();
+    }
+  },
+
+  createReportExport: async (exportData: Omit<ReportExport, 'id' | 'generated_at'>): Promise<ReportExport> => {
+    if (!useSupabase()) {
+      return mockDb.createReportExport(exportData);
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('report_exports')
+        .insert([{
+          company_id: exportData.company_id,
+          report_type: exportData.report_type,
+          generated_by: exportData.generated_by,
+          date_from: exportData.date_from,
+          date_to: exportData.date_to,
+          format: exportData.format,
+          file_url: exportData.file_url,
+          expires_at: exportData.expires_at
+        }])
+        .select()
+        .single();
+      
+      if (error) throw error;
+      
+      // Fetch user name helper
+      const { data: usr } = await supabase!.from('users').select('full_name').eq('id', exportData.generated_by).single();
+
+      return {
+        ...data,
+        generated_by_name: usr ? usr.full_name : 'System'
+      } as ReportExport;
+    } catch (e) {
+      console.warn('Supabase createReportExport failed, using mock database:', e);
+      return mockDb.createReportExport(exportData);
     }
   }
 };

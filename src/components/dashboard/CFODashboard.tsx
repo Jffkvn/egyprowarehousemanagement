@@ -14,8 +14,22 @@ import {
   ArrowRight,
   TrendingUp,
   User,
-  Activity
+  Activity,
+  PieChart as PieIcon
 } from 'lucide-react';
+import { 
+  ResponsiveContainer, 
+  PieChart, 
+  Pie, 
+  Cell, 
+  LineChart, 
+  Line, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  Legend 
+} from 'recharts';
 
 export default function CFODashboard() {
   const { user } = useAuth();
@@ -24,6 +38,7 @@ export default function CFODashboard() {
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [consumables, setConsumables] = useState<ConsumableStock[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [transactions, setTransactions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -33,11 +48,13 @@ export default function CFODashboard() {
         const allEq = await db.getEquipment();
         const allCons = await db.getConsumables();
         const allCats = await db.getCategories();
+        const allTxs = await db.getTransactions();
         
         setRequests(allReqs);
         setEquipment(allEq);
         setConsumables(allCons);
         setCategories(allCats);
+        setTransactions(allTxs);
       } catch (err) {
         console.error('Error fetching CFO dashboard data:', err);
       } finally {
@@ -253,6 +270,129 @@ export default function CFODashboard() {
               <span>Go to Settings</span>
               <ArrowRight size={12} />
             </Link>
+          </div>
+        </div>
+      </div>
+
+      {/* Charts Section */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Doughnut Chart */}
+        <div className="bg-surface border border-border rounded-lg p-5 shadow-sm flex flex-col justify-between">
+          <div className="mb-4">
+            <h3 className="text-sm font-bold text-navy">Asset Status Distribution</h3>
+            <p className="text-xs text-text-muted">Proportion of physical inventory across lifecycle states</p>
+          </div>
+          <div className="h-64">
+            {(() => {
+              const statusCounts = {
+                available: equipment.filter(e => e.status === 'available').length,
+                checked_out: equipment.filter(e => e.status === 'checked_out').length,
+                overdue: equipment.filter(e => e.status === 'overdue').length,
+                under_repair: equipment.filter(e => e.status === 'under_repair').length,
+                retired: equipment.filter(e => e.status === 'retired').length
+              };
+
+              const pieData = [
+                { name: 'Available', value: statusCounts.available, color: '#10B981' },
+                { name: 'Checked Out', value: statusCounts.checked_out, color: '#3B82F6' },
+                { name: 'Overdue', value: statusCounts.overdue, color: '#F59E0B' },
+                { name: 'Under Repair', value: statusCounts.under_repair, color: '#EF4444' },
+                { name: 'Retired', value: statusCounts.retired, color: '#9CA3AF' }
+              ].filter(d => d.value > 0);
+
+              if (pieData.length === 0) {
+                return (
+                  <div className="h-full flex items-center justify-center text-xs text-text-muted italic">
+                    No active inventory status records found.
+                  </div>
+                );
+              }
+
+              return (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={pieData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={60}
+                      outerRadius={80}
+                      paddingAngle={3}
+                      dataKey="value"
+                    >
+                      {pieData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(value) => [`${value} items`, 'Count']} />
+                    <Legend verticalAlign="bottom" height={36} />
+                  </PieChart>
+                </ResponsiveContainer>
+              );
+            })()}
+          </div>
+        </div>
+
+        {/* Line Chart */}
+        <div className="bg-surface border border-border rounded-lg p-5 shadow-sm flex flex-col justify-between">
+          <div className="mb-4">
+            <h3 className="text-sm font-bold text-navy">Stock Movement Trends</h3>
+            <p className="text-xs text-text-muted">Comparison of stock ingest vs consumption &amp; checkouts</p>
+          </div>
+          <div className="h-64">
+            {(() => {
+              const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+              const now = new Date();
+              const lineData = [];
+
+              for (let i = 5; i >= 0; i--) {
+                const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+                const monthIdx = d.getMonth();
+                const monthYearStr = `${months[monthIdx]} ${d.getFullYear().toString().substring(2)}`;
+                
+                const monthTxs = transactions.filter(tx => {
+                  const txDate = new Date(tx.created_at);
+                  return txDate.getMonth() === monthIdx && txDate.getFullYear() === d.getFullYear();
+                });
+
+                const added = monthTxs.filter(tx => tx.transaction_type === 'stock_added').length;
+                const consumed = monthTxs.filter(tx => tx.transaction_type === 'stock_consumed' || tx.transaction_type === 'checkout').length;
+
+                lineData.push({
+                  name: monthYearStr,
+                  Added: added,
+                  'Consumed': consumed
+                });
+              }
+
+              return (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={lineData} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="name" style={{ fontSize: '10px' }} />
+                    <YAxis style={{ fontSize: '10px' }} />
+                    <Tooltip />
+                    <Legend verticalAlign="bottom" height={36} />
+                    <Line 
+                      type="monotone" 
+                      dataKey="Added" 
+                      stroke="#3B82F6" 
+                      strokeWidth={2.5} 
+                      dot={{ r: 4 }} 
+                      activeDot={{ r: 6 }} 
+                    />
+                    <Line 
+                      type="monotone" 
+                      dataKey="Consumed" 
+                      stroke="#F59E0B" 
+                      strokeWidth={2.5} 
+                      dot={{ r: 4 }} 
+                      activeDot={{ r: 6 }} 
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              );
+            })()}
           </div>
         </div>
       </div>

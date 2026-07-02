@@ -27,13 +27,30 @@ export default function SettingsPage() {
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // Push Notification Channels state
+  const [channelsInputs, setChannelsInputs] = useState<Record<string, { whatsapp_number: string; email_enabled: boolean; preferred_channel: string }>>({});
+
   const fetchData = async () => {
     try {
       const sets = await db.getSettings();
       const usrs = await db.getUsers();
+      const chs = await db.getNotificationChannels();
+
       setSettings(sets);
       setApprovalThreshold(sets.approval_threshold_ugx.toString());
       setUsersList(usrs);
+
+      // Populate input states
+      const initialInputs: typeof channelsInputs = {};
+      usrs.forEach(u => {
+        const ch = chs.find(c => c.user_id === u.id);
+        initialInputs[u.id] = {
+          whatsapp_number: ch?.whatsapp_number || '',
+          email_enabled: ch?.email_enabled ?? true,
+          preferred_channel: ch?.preferred_channel || 'in_app_only'
+        };
+      });
+      setChannelsInputs(initialInputs);
     } catch (err) {
       console.error('Error fetching settings/users data:', err);
     } finally {
@@ -90,6 +107,35 @@ export default function SettingsPage() {
     } finally {
       setActionLoading(false);
     }
+  };
+
+  const handleSaveChannel = async (userId: string, userName: string) => {
+    const input = channelsInputs[userId];
+    if (!input) return;
+    try {
+      await db.saveNotificationChannel({
+        user_id: userId,
+        whatsapp_number: input.whatsapp_number || undefined,
+        email_enabled: input.email_enabled,
+        preferred_channel: input.preferred_channel as any,
+        is_active: true
+      });
+      setToastMsg(`Notification settings saved for ${userName}`);
+      setTimeout(() => setToastMsg(null), 2500);
+      fetchData();
+    } catch (err: any) {
+      alert(err.message || 'Failed to save notification settings');
+    }
+  };
+
+  const handleChannelInputChange = (userId: string, field: string, value: any) => {
+    setChannelsInputs(prev => ({
+      ...prev,
+      [userId]: {
+        ...prev[userId],
+        [field]: value
+      }
+    }));
   };
 
   const [actionLoading, setActionLoading] = useState(false);
@@ -211,6 +257,96 @@ export default function SettingsPage() {
               </table>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Push Notification Channels Section */}
+      <div className="bg-surface border border-border rounded-lg p-5 shadow-sm space-y-4">
+        <div>
+          <h3 className="text-sm font-bold text-navy">Push Notification Channels</h3>
+          <p className="text-xs text-text-muted">Configure WhatsApp and Email triggers for warehouse operations and CFO overrides.</p>
+        </div>
+
+        <div className="bg-background/40 border border-border p-4 rounded-lg text-xs space-y-1">
+          <h4 className="font-semibold text-navy flex items-center gap-1">
+            <ShieldAlert size={14} className="text-primary" /> Active Alert Routing
+          </h4>
+          <p className="text-text-muted">
+            Warehouse Managers and CFOs receive automated push alerts for: low-stock warnings, damaged return handoffs, and overdue PM return escalations.
+          </p>
+        </div>
+
+        <div className="overflow-x-auto border border-border rounded-lg bg-surface">
+          <table className="w-full border-collapse text-left text-xs">
+            <thead>
+              <tr className="bg-background text-text-muted font-semibold uppercase border-b border-border">
+                <th className="px-6 py-3">User &amp; Role</th>
+                <th className="px-6 py-3">WhatsApp Number</th>
+                <th className="px-6 py-3 text-center">Email Alerts</th>
+                <th className="px-6 py-3">Preferred Channel</th>
+                <th className="px-6 py-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {usersList
+                .filter(u => u.role === 'warehouse_manager' || u.role === 'cfo')
+                .map((usr) => {
+                  const input = channelsInputs[usr.id] || { whatsapp_number: '', email_enabled: true, preferred_channel: 'in_app_only' };
+                  return (
+                    <tr key={usr.id} className="hover:bg-background/20 transition-colors">
+                      <td className="px-6 py-4">
+                        <div className="font-semibold text-navy">{usr.full_name}</div>
+                        <div className="text-[10px] text-text-muted uppercase font-bold mt-0.5">
+                          {usr.role === 'cfo' ? 'CFO' : 'Warehouse Manager'}
+                        </div>
+                      </td>
+
+                      <td className="px-6 py-4">
+                        <input
+                          type="text"
+                          value={input.whatsapp_number}
+                          onChange={(e) => handleChannelInputChange(usr.id, 'whatsapp_number', e.target.value)}
+                          placeholder="+256700000000"
+                          className="h-9 px-3 border border-border rounded-md text-xs bg-background focus:outline-none focus:border-primary w-48 font-medium"
+                        />
+                      </td>
+
+                      <td className="px-6 py-4 text-center">
+                        <input
+                          type="checkbox"
+                          checked={input.email_enabled}
+                          onChange={(e) => handleChannelInputChange(usr.id, 'email_enabled', e.target.checked)}
+                          className="h-4 w-4 text-primary border-border rounded focus:ring-primary"
+                        />
+                      </td>
+
+                      <td className="px-6 py-4">
+                        <select
+                          value={input.preferred_channel}
+                          onChange={(e) => handleChannelInputChange(usr.id, 'preferred_channel', e.target.value)}
+                          className="h-9 px-2 border border-border rounded-md bg-background focus:outline-none text-xs w-40 font-medium"
+                        >
+                          <option value="in_app_only">In-App Only</option>
+                          <option value="whatsapp">WhatsApp Only</option>
+                          <option value="email">Email Only</option>
+                          <option value="both">Both (WA + Email)</option>
+                        </select>
+                      </td>
+
+                      <td className="px-6 py-4 text-right">
+                        <button
+                          type="button"
+                          onClick={() => handleSaveChannel(usr.id, usr.full_name)}
+                          className="h-8 px-3 bg-primary hover:bg-primary/95 text-white rounded text-xs font-semibold transition-colors shadow-xs"
+                        >
+                          Save
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+            </tbody>
+          </table>
         </div>
       </div>
 

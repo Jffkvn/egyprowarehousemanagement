@@ -394,3 +394,227 @@ CREATE POLICY notifications_update ON notifications
 CREATE POLICY notifications_insert ON notifications
   FOR INSERT WITH CHECK (company_id = get_current_user_company());
 
+
+-- 7. PHASE TWO ADDITIONS
+
+-- Enums
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'damage_status') THEN
+    CREATE TYPE damage_status AS ENUM ('open', 'under_repair', 'resolved', 'written_off');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'grn_condition') THEN
+    CREATE TYPE grn_condition AS ENUM ('good', 'damaged', 'pending_inspection');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'preferred_notif_channel') THEN
+    CREATE TYPE preferred_notif_channel AS ENUM ('whatsapp', 'email', 'both', 'in_app_only');
+  END IF;
+END
+$$;
+
+-- Table: damage_reports
+CREATE TABLE IF NOT EXISTS damage_reports (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  equipment_id UUID NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
+  originating_transaction_id UUID REFERENCES transactions(id) ON DELETE SET NULL,
+  reported_by UUID NOT NULL REFERENCES users(id),
+  reported_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  damage_description TEXT NOT NULL,
+  estimated_repair_cost_ugx NUMERIC,
+  actual_repair_cost_ugx NUMERIC,
+  vendor_name TEXT,
+  status damage_status NOT NULL DEFAULT 'open',
+  resolved_at TIMESTAMPTZ,
+  resolved_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  resolution_notes TEXT,
+  photos TEXT[],
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Table: grn_documents
+CREATE TABLE IF NOT EXISTS grn_documents (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  grn_number TEXT NOT NULL UNIQUE,
+  received_by UUID NOT NULL REFERENCES users(id),
+  supplier_name TEXT,
+  delivery_note_ref TEXT,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Table: grn_items
+CREATE TABLE IF NOT EXISTS grn_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  grn_id UUID NOT NULL REFERENCES grn_documents(id) ON DELETE CASCADE,
+  equipment_id UUID REFERENCES equipment(id) ON DELETE SET NULL,
+  consumable_id UUID REFERENCES consumable_stock(id) ON DELETE SET NULL,
+  quantity_received NUMERIC NOT NULL CHECK (quantity_received > 0),
+  unit_value_ugx NUMERIC NOT NULL CHECK (unit_value_ugx >= 0),
+  condition_on_arrival grn_condition NOT NULL DEFAULT 'good',
+  notes TEXT,
+  CONSTRAINT grn_item_source_check CHECK (
+    (equipment_id IS NOT NULL AND consumable_id IS NULL) OR
+    (equipment_id IS NULL AND consumable_id IS NOT NULL)
+  )
+);
+
+-- Table: notification_channels
+CREATE TABLE IF NOT EXISTS notification_channels (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE,
+  whatsapp_number TEXT,
+  email_enabled BOOLEAN NOT NULL DEFAULT true,
+  preferred_channel preferred_notif_channel NOT NULL DEFAULT 'in_app_only',
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Additive Table Alterations
+ALTER TABLE equipment ADD COLUMN IF NOT EXISTS damage_report_id UUID REFERENCES damage_reports(id) ON DELETE SET NULL;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS grn_id UUID REFERENCES grn_documents(id) ON DELETE SET NULL;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS push_sent BOOLEAN DEFAULT false;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS push_sent_at TIMESTAMPTZ;
+
+-- Add 'grn' to entry_method enum if not exists
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_type t JOIN pg_enum e ON t.oid = e.enumtypid 
+    WHERE t.typname = 'entry_method' AND e.enumlabel = 'grn'
+  ) THEN
+    ALTER TYPE entry_method ADD VALUE 'grn';
+  END IF;
+END
+$$;
+
+-- RLS: damage_reports
+ALTER TABLE damage_reports ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY damage_reports_select ON damage_reports
+  FOR SELECT USING (company_id = get_current_user_company() AND get_current_user_role() IN ('warehouse_manager', 'cfo'));
+
+CREATE POLICY damage_reports_insert ON damage_reports
+  FOR INSERT WITH CHECK (company_id = get_current_user_company() AND get_current_user_role() = 'warehouse_manager');
+
+CREATE POLICY damage_reports_update ON damage_reports
+  FOR UPDATE USING (company_id = get_current_user_company() AND get_current_user_role() IN ('warehouse_manager', 'cfo'));
+
+-- RLS: grn_documents
+ALTER TABLE grn_documents ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY grn_documents_select ON grn_documents
+  FOR SELECT USING (company_id = get_current_user_company() AND get_current_user_role() IN ('warehouse_manager', 'cfo'));
+
+CREATE POLICY grn_documents_insert ON grn_documents
+  FOR INSERT WITH CHECK (company_id = get_current_user_company() AND get_current_user_role() IN ('warehouse_manager', 'cfo'));
+
+-- RLS: grn_items
+ALTER TABLE grn_items ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY grn_items_select ON grn_items
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM grn_documents g 
+      WHERE g.id = grn_id AND g.company_id = get_current_user_company()
+    ) AND 
+    get_current_user_role() IN ('warehouse_manager', 'cfo')
+  );
+
+CREATE POLICY grn_items_insert ON grn_items
+  FOR INSERT WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM grn_documents g 
+      WHERE g.id = grn_id AND g.company_id = get_current_user_company()
+    ) AND 
+    get_current_user_role() IN ('warehouse_manager', 'cfo')
+  );
+
+-- RLS: notification_channels
+ALTER TABLE notification_channels ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY notification_channels_manage ON notification_channels
+  FOR ALL USING (
+    user_id = auth.uid() OR 
+    get_current_user_role() = 'cfo'
+  );
+
+
+-- Phase Three Additions
+
+-- Add 'qr_scan' to entry_method enum if not exists
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_type t JOIN pg_enum e ON t.oid = e.enumtypid 
+    WHERE t.typname = 'entry_method' AND e.enumlabel = 'qr_scan'
+  ) THEN
+    ALTER TYPE entry_method ADD VALUE 'qr_scan';
+  END IF;
+END
+$$;
+
+-- Create qr_labels table
+CREATE TABLE IF NOT EXISTS qr_labels (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  equipment_id UUID REFERENCES equipment(id) ON DELETE CASCADE,
+  consumable_id UUID REFERENCES consumable_stock(id) ON DELETE CASCADE,
+  label_code TEXT UNIQUE NOT NULL,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  generated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  printed_at TIMESTAMPTZ,
+  CONSTRAINT check_only_one_target CHECK (
+    (equipment_id IS NOT NULL AND consumable_id IS NULL) OR
+    (equipment_id IS NULL AND consumable_id IS NOT NULL)
+  )
+);
+
+-- Add qr_label_id to equipment and consumable_stock tables
+ALTER TABLE equipment ADD COLUMN IF NOT EXISTS qr_label_id UUID REFERENCES qr_labels(id) ON DELETE SET NULL;
+ALTER TABLE consumable_stock ADD COLUMN IF NOT EXISTS qr_label_id UUID REFERENCES qr_labels(id) ON DELETE SET NULL;
+
+-- Create report_type and report_format enums
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'report_type_enum') THEN
+    CREATE TYPE report_type_enum AS ENUM ('inventory_valuation', 'stock_movements', 'damage_costs', 'full_audit');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'report_format_enum') THEN
+    CREATE TYPE report_format_enum AS ENUM ('pdf', 'excel');
+  END IF;
+END
+$$;
+
+-- Create report_exports table
+CREATE TABLE IF NOT EXISTS report_exports (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  report_type report_type_enum NOT NULL,
+  generated_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  date_from DATE NOT NULL,
+  date_to DATE NOT NULL,
+  format report_format_enum NOT NULL,
+  file_url TEXT NOT NULL,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL
+);
+
+-- RLS: qr_labels
+ALTER TABLE qr_labels ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY qr_labels_select ON qr_labels
+  FOR SELECT USING (company_id = get_current_user_company() AND get_current_user_role() IN ('pm', 'warehouse_manager', 'cfo'));
+
+CREATE POLICY qr_labels_insert ON qr_labels
+  FOR INSERT WITH CHECK (company_id = get_current_user_company() AND get_current_user_role() IN ('warehouse_manager', 'cfo'));
+
+-- RLS: report_exports
+ALTER TABLE report_exports ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY report_exports_cfo ON report_exports
+  FOR ALL USING (company_id = get_current_user_company() AND get_current_user_role() = 'cfo');
+
+

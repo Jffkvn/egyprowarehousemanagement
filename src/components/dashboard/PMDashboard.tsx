@@ -184,6 +184,11 @@ export default function PMDashboard() {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <StatusBadge status={req.status} />
+                        {req.status === 'pending' && (
+                          <div className="text-[10px] text-text-muted mt-1 font-mono">
+                            Routed to: {req.routed_to === 'cfo' ? 'CFO' : 'Warehouse Mgr'}
+                          </div>
+                        )}
                         {req.status === 'rejected' && req.rejection_reason && (
                           <div className="text-[10px] text-danger max-w-[150px] truncate mt-1" title={req.rejection_reason}>
                             Reason: {req.rejection_reason}

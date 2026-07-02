@@ -19,8 +19,13 @@ import {
   ChevronRight,
   TrendingUp,
   FileSpreadsheet,
-  Bell
+  Bell,
+  Check,
+  Wrench,
+  ClipboardList,
+  ScanLine
 } from 'lucide-react';
+import ScannerOverlay from '../scanner/ScannerOverlay';
 
 interface ShellProps {
   children: React.ReactNode;
@@ -32,6 +37,15 @@ export default function Shell({ children }: ShellProps) {
   const router = useRouter();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [scannerOpen, setScannerOpen] = useState(false);
+
+  useEffect(() => {
+    const handleOpenScanner = () => setScannerOpen(true);
+    window.addEventListener('open-scanner', handleOpenScanner);
+    return () => {
+      window.removeEventListener('open-scanner', handleOpenScanner);
+    };
+  }, []);
 
   // Notifications state
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -105,6 +119,18 @@ export default function Shell({ children }: ShellProps) {
       roles: ['pm', 'warehouse_manager', 'cfo']
     },
     {
+      name: 'Receive Stock (GRN)',
+      href: '/stock/receive',
+      icon: ClipboardList,
+      roles: ['warehouse_manager', 'cfo']
+    },
+    {
+      name: 'Damage Reports',
+      href: '/damage-reports',
+      icon: Wrench,
+      roles: ['warehouse_manager', 'cfo']
+    },
+    {
       name: 'Procurement',
       href: '/procurement',
       icon: TrendingUp,
@@ -115,6 +141,12 @@ export default function Shell({ children }: ShellProps) {
       href: '/transactions',
       icon: History,
       roles: ['warehouse_manager', 'cfo']
+    },
+    {
+      name: 'Reports',
+      href: '/reports',
+      icon: FileSpreadsheet,
+      roles: ['cfo']
     },
     {
       name: 'Settings',
@@ -231,6 +263,8 @@ export default function Shell({ children }: ShellProps) {
               {pathname === '/requests/new' && 'Submit Equipment Request'}
               {pathname.startsWith('/requests/') && pathname !== '/requests/new' && 'Request Details'}
               {pathname === '/equipment' && 'Equipment & Consumables Catalog'}
+              {pathname === '/stock/receive' && 'Goods Received Note (GRN) Intake'}
+              {pathname === '/damage-reports' && 'Damage Reports'}
               {pathname === '/procurement' && 'Procurement Tracker'}
               {pathname === '/transactions' && 'Audit Transactions Log'}
               {pathname === '/settings' && 'System Settings'}
@@ -238,7 +272,18 @@ export default function Shell({ children }: ShellProps) {
           </div>
 
           {/* User Details */}
-          <div className="flex items-center space-x-4">
+          <div className="flex items-center space-x-3.5">
+            {/* Scan Button (WM only) */}
+            {user?.role === 'warehouse_manager' && (
+              <button
+                onClick={() => setScannerOpen(true)}
+                className="p-1.5 rounded-full hover:bg-background text-text-muted hover:text-navy transition-colors focus:outline-none"
+                title="Scan QR label"
+              >
+                <ScanLine size={20} />
+              </button>
+            )}
+
             {/* Notification Bell */}
             <div className="relative">
               <button
@@ -325,6 +370,16 @@ export default function Shell({ children }: ShellProps) {
           </div>
         </main>
       </div>
+
+      {/* Camera scanner overlay */}
+      <ScannerOverlay 
+        isOpen={scannerOpen}
+        onClose={() => setScannerOpen(false)}
+        onActionComplete={() => {
+          // Trigger a local custom reload event to refresh dashboard/catalog states
+          window.dispatchEvent(new Event('refresh-data'));
+        }}
+      />
     </div>
   );
 }

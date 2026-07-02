@@ -12,7 +12,7 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email) return;
-    await signIn(email);
+    await signIn(email, password);
   };
 
   const setDemoCredentials = (demoEmail: string) => {

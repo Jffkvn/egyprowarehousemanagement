@@ -13,8 +13,11 @@ import {
   Database, 
   AlertCircle, 
   CheckCircle,
-  FileText
+  FileText,
+  Printer,
+  QrCode
 } from 'lucide-react';
+import QRCode from 'qrcode';
 
 export default function CatalogPage() {
   const { user } = useAuth();
@@ -23,6 +26,18 @@ export default function CatalogPage() {
   const [consumables, setConsumables] = useState<ConsumableStock[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Print & Selection States
+  const [selectedEquipmentIds, setSelectedEquipmentIds] = useState<string[]>([]);
+  const [selectedConsumableIds, setSelectedConsumableIds] = useState<string[]>([]);
+  const [printModalOpen, setPrintModalOpen] = useState(false);
+  const [printLabelsList, setPrintLabelsList] = useState<Array<{
+    id: string;
+    code: string;
+    name: string;
+    labelCode: string;
+    qrDataUrl?: string;
+  }>>([]);
 
   // Search/Filters
   const [search, setSearch] = useState('');
@@ -102,6 +117,99 @@ export default function CatalogPage() {
       }
     }
   }, []);
+
+  const handlePrintSingle = async (item: Equipment | ConsumableStock, type: 'reusable' | 'consumable') => {
+    try {
+      const labelCode = type === 'reusable' ? `EQPT:${item.id}` : `CONS:${item.id}`;
+      const qrDataUrl = await QRCode.toDataURL(labelCode, { 
+        errorCorrectionLevel: 'H', 
+        margin: 2, 
+        width: 256 
+      });
+
+      // Update printed_at timestamp in database
+      let labelId = '';
+      if (type === 'reusable') {
+        const found = item as Equipment;
+        if (found.qr_label_id) labelId = found.qr_label_id;
+      } else {
+        const found = item as ConsumableStock;
+        if (found.qr_label_id) labelId = found.qr_label_id;
+      }
+
+      if (labelId) {
+        await db.markQrLabelPrinted(labelId);
+      }
+
+      setPrintLabelsList([{
+        id: item.id,
+        code: type === 'reusable' ? (item as Equipment).asset_code : (item as ConsumableStock).sku_code,
+        name: item.name,
+        labelCode,
+        qrDataUrl
+      }]);
+      setPrintModalOpen(true);
+    } catch (err) {
+      console.error('Failed to generate QR:', err);
+      alert('Failed to generate QR label');
+    }
+  };
+
+  const handlePrintBatch = async () => {
+    const labels: typeof printLabelsList = [];
+    try {
+      for (const eqId of selectedEquipmentIds) {
+        const eq = equipment.find(e => e.id === eqId);
+        if (eq) {
+          const labelCode = `EQPT:${eq.id}`;
+          const qrDataUrl = await QRCode.toDataURL(labelCode, { 
+            errorCorrectionLevel: 'H', 
+            margin: 2, 
+            width: 256 
+          });
+          labels.push({
+            id: eq.id,
+            code: eq.asset_code,
+            name: eq.name,
+            labelCode,
+            qrDataUrl
+          });
+          if (eq.qr_label_id) {
+            await db.markQrLabelPrinted(eq.qr_label_id);
+          }
+        }
+      }
+
+      for (const conId of selectedConsumableIds) {
+        const con = consumables.find(c => c.id === conId);
+        if (con) {
+          const labelCode = `CONS:${con.id}`;
+          const qrDataUrl = await QRCode.toDataURL(labelCode, { 
+            errorCorrectionLevel: 'H', 
+            margin: 2, 
+            width: 256 
+          });
+          labels.push({
+            id: con.id,
+            code: con.sku_code,
+            name: con.name,
+            labelCode,
+            qrDataUrl
+          });
+          if (con.qr_label_id) {
+            await db.markQrLabelPrinted(con.qr_label_id);
+          }
+        }
+      }
+
+      if (labels.length === 0) return;
+      setPrintLabelsList(labels);
+      setPrintModalOpen(true);
+    } catch (err) {
+      console.error('Failed to generate batch QRs:', err);
+      alert('Failed to generate QR labels');
+    }
+  };
 
   const handleAddCategory = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -337,6 +445,20 @@ export default function CatalogPage() {
             <table className="w-full border-collapse text-left text-sm">
               <thead>
                 <tr className="bg-background text-text-muted text-xs font-semibold uppercase border-b border-border">
+                  <th className="px-6 py-3 w-10">
+                    <input 
+                      type="checkbox"
+                      checked={selectedEquipmentIds.length === filteredEqs.length && filteredEqs.length > 0}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedEquipmentIds(filteredEqs.map(eq => eq.id));
+                        } else {
+                          setSelectedEquipmentIds([]);
+                        }
+                      }}
+                      className="h-4 w-4 text-primary border-border rounded focus:ring-primary"
+                    />
+                  </th>
                   <th className="px-6 py-3">Asset Code</th>
                   <th className="px-6 py-3">Equipment Name</th>
                   <th className="px-6 py-3">Category</th>
@@ -344,12 +466,13 @@ export default function CatalogPage() {
                   <th className="px-6 py-3">Unit Value</th>
                   <th className="px-6 py-3">Status</th>
                   <th className="px-6 py-3">Current Location</th>
+                  <th className="px-6 py-3 text-right">QR Label</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {filteredEqs.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="text-center py-12 text-xs text-text-muted italic">
+                    <td colSpan={9} className="text-center py-12 text-xs text-text-muted italic">
                       No matching equipment in catalog.
                     </td>
                   </tr>
@@ -358,6 +481,20 @@ export default function CatalogPage() {
                     const cat = categories.find(c => c.id === item.category_id);
                     return (
                       <tr key={item.id} className="hover:bg-background/40 transition-colors">
+                        <td className="px-6 py-4">
+                          <input 
+                            type="checkbox"
+                            checked={selectedEquipmentIds.includes(item.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedEquipmentIds([...selectedEquipmentIds, item.id]);
+                              } else {
+                                setSelectedEquipmentIds(selectedEquipmentIds.filter(id => id !== item.id));
+                              }
+                            }}
+                            className="h-4 w-4 text-primary border-border rounded focus:ring-primary"
+                          />
+                        </td>
                         <td className="px-6 py-4 font-mono text-xs font-semibold text-navy">{item.asset_code}</td>
                         <td className="px-6 py-4">
                           <div className="font-semibold text-text">{item.name}</div>
@@ -397,6 +534,15 @@ export default function CatalogPage() {
                           <StatusBadge status={item.status} />
                         </td>
                         <td className="px-6 py-4 text-xs text-text-muted">{item.current_location || 'Warehouse'}</td>
+                        <td className="px-6 py-4 text-right">
+                          <button
+                            onClick={() => handlePrintSingle(item, 'reusable')}
+                            className="inline-flex items-center justify-center p-1.5 border border-border text-navy hover:bg-navy/5 rounded transition-all focus:outline-none"
+                            title="Print QR label"
+                          >
+                            <Printer size={14} />
+                          </button>
+                        </td>
                       </tr>
                     );
                   })
@@ -407,18 +553,33 @@ export default function CatalogPage() {
             <table className="w-full border-collapse text-left text-sm">
               <thead>
                 <tr className="bg-background text-text-muted text-xs font-semibold uppercase border-b border-border">
+                  <th className="px-6 py-3 w-10">
+                    <input 
+                      type="checkbox"
+                      checked={selectedConsumableIds.length === filteredCons.length && filteredCons.length > 0}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedConsumableIds(filteredCons.map(c => c.id));
+                        } else {
+                          setSelectedConsumableIds([]);
+                        }
+                      }}
+                      className="h-4 w-4 text-primary border-border rounded focus:ring-primary"
+                    />
+                  </th>
                   <th className="px-6 py-3">SKU Code</th>
                   <th className="px-6 py-3">Item Name</th>
                   <th className="px-6 py-3">Category</th>
                   <th className="px-6 py-3">Unit Value</th>
                   <th className="px-6 py-3">Quantity On Hand</th>
                   <th className="px-6 py-3">Status</th>
+                  <th className="px-6 py-3 text-right">QR Label</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {filteredCons.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="text-center py-12 text-xs text-text-muted italic">
+                    <td colSpan={8} className="text-center py-12 text-xs text-text-muted italic">
                       No matching consumables in catalog.
                     </td>
                   </tr>
@@ -428,6 +589,20 @@ export default function CatalogPage() {
                     const isLow = item.quantity_on_hand <= item.reorder_level;
                     return (
                       <tr key={item.id} className="hover:bg-background/40 transition-colors">
+                        <td className="px-6 py-4">
+                          <input 
+                            type="checkbox"
+                            checked={selectedConsumableIds.includes(item.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedConsumableIds([...selectedConsumableIds, item.id]);
+                              } else {
+                                setSelectedConsumableIds(selectedConsumableIds.filter(id => id !== item.id));
+                              }
+                            }}
+                            className="h-4 w-4 text-primary border-border rounded focus:ring-primary"
+                          />
+                        </td>
                         <td className="px-6 py-4 font-mono text-xs font-semibold text-navy">{item.sku_code}</td>
                         <td className="px-6 py-4 font-semibold text-text">{item.name}</td>
                         <td className="px-6 py-4 text-xs text-text">{cat?.name || 'Unassigned'}</td>
@@ -468,6 +643,15 @@ export default function CatalogPage() {
                               In Stock
                             </span>
                           )}
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <button
+                            onClick={() => handlePrintSingle(item, 'consumable')}
+                            className="inline-flex items-center justify-center p-1.5 border border-border text-navy hover:bg-navy/5 rounded transition-all focus:outline-none"
+                            title="Print QR label"
+                          >
+                            <Printer size={14} />
+                          </button>
                         </td>
                       </tr>
                     );
@@ -777,6 +961,150 @@ export default function CatalogPage() {
           </div>
         </div>
       )}
+
+      {/* Floating Action Bar for Batch Print */}
+      {(selectedEquipmentIds.length > 0 || selectedConsumableIds.length > 0) && (
+        <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-40 bg-navy text-white px-6 py-4 rounded-xl shadow-2xl border border-white/10 flex items-center space-x-6 animate-scale-up">
+          <div className="text-xs font-semibold">
+            {selectedEquipmentIds.length + selectedConsumableIds.length} labels selected for printing
+          </div>
+          <div className="flex space-x-2">
+            <button
+              onClick={() => {
+                setSelectedEquipmentIds([]);
+                setSelectedConsumableIds([]);
+              }}
+              className="px-3 h-8 border border-white/15 hover:bg-white/5 rounded text-xs font-semibold transition-colors"
+            >
+              Clear Selection
+            </button>
+            <button
+              onClick={handlePrintBatch}
+              className="px-4 h-8 bg-primary hover:bg-primary/95 text-white rounded text-xs font-semibold transition-colors flex items-center space-x-1.5"
+            >
+              <Printer size={12} />
+              <span>Print QR Labels</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Print Preview Modal */}
+      {printModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy/40 backdrop-blur-xs print:hidden">
+          <div className="w-full max-w-2xl bg-surface border border-border rounded-xl shadow-xl overflow-hidden flex flex-col max-h-[85vh]">
+            <div className="h-14 border-b border-border px-6 flex items-center justify-between bg-background">
+              <div>
+                <h3 className="text-sm font-bold text-navy">Print QR Labels</h3>
+                <p className="text-[10px] text-text-muted">Brother DK-11209 Layout Preview (62mm x 90mm)</p>
+              </div>
+              <button 
+                onClick={() => {
+                  setPrintModalOpen(false);
+                  setPrintLabelsList([]);
+                }}
+                className="text-text-muted hover:text-text p-1 transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Preview Area */}
+            <div className="flex-1 p-6 overflow-y-auto bg-background/50 grid grid-cols-2 gap-4">
+              {printLabelsList.map(label => (
+                <div key={label.id} className="bg-white text-black p-4 rounded border border-border shadow-xs flex flex-col items-center justify-between aspect-[62/90] max-w-[200px] mx-auto">
+                  {/* Egypro Logo Mock */}
+                  <div className="w-full flex items-center justify-center border-b border-black/10 pb-1 mb-2">
+                    <span className="font-bold text-[10px] text-slate-700 font-mono tracking-wider">EGYPRO LOGISTICS</span>
+                  </div>
+
+                  {/* QR Image */}
+                  {label.qrDataUrl && (
+                    <img 
+                      src={label.qrDataUrl} 
+                      alt={label.code} 
+                      className="w-32 h-32 object-contain"
+                    />
+                  )}
+
+                  {/* Descriptions */}
+                  <div className="w-full text-center mt-2 space-y-0.5">
+                    <div className="font-bold font-mono text-[13px] text-black leading-none">{label.code}</div>
+                    <div className="text-[9px] text-slate-600 truncate max-w-full leading-tight">{label.name}</div>
+                    <div className="font-mono text-[7px] text-slate-400">{label.labelCode}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Print Area inside DOM (hidden in screen, visible in print) */}
+            <div className="print-area hidden">
+              {printLabelsList.map(label => (
+                <div key={label.id} className="label-print-card bg-white text-black p-6 border border-slate-300 flex flex-col items-center justify-between mx-auto" style={{ width: '62mm', height: '90mm', pageBreakInside: 'avoid' }}>
+                  <div className="w-full text-center border-b border-black/20 pb-1 mb-2 font-mono font-bold text-[10px] tracking-wider text-slate-700">
+                    EGYPRO LOGISTICS
+                  </div>
+                  {label.qrDataUrl && (
+                    <img src={label.qrDataUrl} alt={label.code} style={{ width: '42mm', height: '42mm' }} />
+                  )}
+                  <div className="w-full text-center mt-2">
+                    <div className="font-bold font-mono text-[14px] leading-none text-black">{label.code}</div>
+                    <div className="text-[9px] text-slate-700 truncate max-w-full font-semibold">{label.name}</div>
+                    <div className="font-mono text-[7px] text-slate-400">{label.labelCode}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="border-t border-border p-4 flex justify-end space-x-3 bg-background/25">
+              <button
+                type="button"
+                onClick={() => {
+                  setPrintModalOpen(false);
+                  setPrintLabelsList([]);
+                }}
+                className="px-4 h-9 border border-border text-text rounded text-xs font-semibold hover:bg-background transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => window.print()}
+                className="px-5 h-9 bg-primary hover:bg-primary/95 text-white rounded text-xs font-semibold transition-colors flex items-center space-x-1.5"
+              >
+                <Printer size={14} />
+                <span>Trigger Print</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Universal CSS styles for print layout */}
+      <style dangerouslySetInnerHTML={{ __html: `
+        @media print {
+          body * {
+            visibility: hidden !important;
+          }
+          .print-area, .print-area * {
+            visibility: visible !important;
+          }
+          .print-area {
+            position: absolute !important;
+            left: 0 !important;
+            top: 0 !important;
+            width: 100% !important;
+            display: grid !important;
+            grid-template-columns: repeat(2, 1fr) !important;
+            gap: 15px !important;
+            background: white !important;
+          }
+          .label-print-card {
+            border: 1px solid #ccc !important;
+            background: white !important;
+            page-break-inside: avoid !important;
+          }
+        }
+      `}} />
     </div>
   );
 }

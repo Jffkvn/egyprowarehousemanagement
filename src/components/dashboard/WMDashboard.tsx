@@ -16,7 +16,11 @@ import {
   Calendar,
   User,
   ArrowRight,
-  RefreshCw
+  RefreshCw,
+  X,
+  ShieldAlert,
+  ScanLine,
+  Camera
 } from 'lucide-react';
 
 export default function WMDashboard() {
@@ -29,6 +33,13 @@ export default function WMDashboard() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'approvals' | 'fulfillment' | 'overdue' | 'activity'>('approvals');
   const [refreshKey, setRefreshKey] = useState(0);
+
+  // Overdue Returns Escalation States
+  const [escalatedIds, setEscalatedIds] = useState<string[]>([]);
+  const [selectedOverdueItem, setSelectedOverdueItem] = useState<any | null>(null);
+  const [escalationReason, setEscalationReason] = useState('');
+  const [escalating, setEscalating] = useState(false);
+  const [showToast, setShowToast] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -54,9 +65,66 @@ export default function WMDashboard() {
     fetchData();
   }, [refreshKey]);
 
+  useEffect(() => {
+    const handleRefreshData = () => {
+      setLoading(true);
+      setRefreshKey(prev => prev + 1);
+    };
+    window.addEventListener('refresh-data', handleRefreshData);
+    return () => {
+      window.removeEventListener('refresh-data', handleRefreshData);
+    };
+  }, []);
+
   const handleRefresh = () => {
     setLoading(true);
     setRefreshKey(prev => prev + 1);
+  };
+
+  const handleEscalateSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedOverdueItem || !user || escalationReason.length < 10) return;
+
+    setEscalating(true);
+    try {
+      const cfos = (await db.getUsers()).filter(u => u.role === 'cfo');
+      
+      for (const cfo of cfos) {
+        await db.createNotification(
+          cfo.company_id,
+          cfo.id,
+          'Overdue Return Escalation',
+          `🕐 Overdue escalation: ${selectedOverdueItem.asset_code} ${selectedOverdueItem.name} is overdue. Reason: ${escalationReason}`,
+          `/equipment?id=${selectedOverdueItem.id}`
+        );
+
+        try {
+          await fetch('/api/push-notify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              user_id: cfo.id,
+              title: 'Overdue Return Escalation',
+              message: `🕐 Overdue escalation: ${selectedOverdueItem.asset_code} ${selectedOverdueItem.name} is overdue. Reason: ${escalationReason}`,
+              link: `/equipment?id=${selectedOverdueItem.id}`
+            })
+          });
+        } catch (pushErr) {
+          console.warn('API push notify trigger failed:', pushErr);
+        }
+      }
+
+      setEscalatedIds(prev => [...prev, selectedOverdueItem.id]);
+      setSelectedOverdueItem(null);
+      setEscalationReason('');
+      setShowToast(true);
+      setTimeout(() => setShowToast(false), 3000);
+    } catch (err) {
+      console.error('Error escalating item:', err);
+      alert('Escalation failed');
+    } finally {
+      setEscalating(false);
+    }
   };
 
   // Card Counters
@@ -87,6 +155,26 @@ export default function WMDashboard() {
           title="Refresh Dashboard"
         >
           <RefreshCw size={16} />
+        </button>
+      </div>
+
+      {/* Scan Shortcut banner */}
+      <div className="bg-gradient-to-r from-navy to-navy/90 text-white rounded-xl border border-white/10 p-5 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div className="flex items-center space-x-3.5 text-center sm:text-left">
+          <div className="p-3 bg-white/10 rounded-xl border border-white/15">
+            <ScanLine size={24} className="text-primary" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-white">Scan Barcode / QR Code</h3>
+            <p className="text-xs text-white/70">Instantly check out items, log returns, or inspect current catalog records</p>
+          </div>
+        </div>
+        <button
+          onClick={() => window.dispatchEvent(new Event('open-scanner'))}
+          className="h-10 px-5 bg-primary hover:bg-primary/95 text-white font-bold text-xs rounded-lg transition-colors flex items-center space-x-1.5 shadow-md focus:outline-none flex-shrink-0"
+        >
+          <Camera size={14} />
+          <span>Launch Camera Scanner</span>
         </button>
       </div>
 
@@ -336,15 +424,32 @@ export default function WMDashboard() {
                       <td className="px-6 py-4 whitespace-nowrap">
                         <StatusBadge status="overdue" />
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-xs">
-                        {/* We will route WM to the catalog or search the active request to return this */}
+                      <td className="px-6 py-4 whitespace-nowrap text-right text-xs space-x-2">
                         <Link
-                          href="/equipment"
+                          href={`/equipment?id=${eq.id}`}
                           className="inline-flex items-center space-x-1 border border-navy/20 text-navy hover:bg-navy/5 rounded px-3 h-8 font-semibold transition-colors"
                         >
-                          <span>Go to Catalog</span>
+                          <span>View in Catalog</span>
                         </Link>
+                        {escalatedIds.includes(eq.id) ? (
+                          <button
+                            type="button"
+                            disabled
+                            className="inline-flex items-center justify-center bg-gray-100 border border-border text-text-muted rounded px-3 h-8 font-semibold text-xs disabled:opacity-50"
+                          >
+                            Escalated
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setSelectedOverdueItem(eq)}
+                            className="inline-flex items-center space-x-1 border border-amber-600/30 text-amber-600 hover:bg-amber-50 rounded px-3 h-8 font-semibold transition-all hover:border-amber-600"
+                          >
+                            Escalate to CFO
+                          </button>
+                        )}
                       </td>
+
                     </tr>
                   ))
                 )}
@@ -402,6 +507,77 @@ export default function WMDashboard() {
           )}
         </div>
       </div>
+
+      {/* Escalation Toast */}
+      {showToast && (
+        <div className="fixed bottom-4 right-4 z-50 bg-emerald-600 text-white px-4 py-2.5 rounded-lg shadow-lg text-xs font-semibold animate-slide-in">
+          Escalation request sent to CFO
+        </div>
+      )}
+
+      {/* Escalation Modal */}
+      {selectedOverdueItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy/40 backdrop-blur-xs">
+          <div className="w-full max-w-md bg-surface border border-border rounded-lg shadow-xl overflow-hidden animate-scale-up">
+            <div className="h-14 border-b border-border px-6 flex items-center justify-between bg-background">
+              <h3 className="text-sm font-bold text-navy">Escalate Overdue return to CFO</h3>
+              <button 
+                type="button"
+                onClick={() => {
+                  setSelectedOverdueItem(null);
+                  setEscalationReason('');
+                }}
+                className="text-text-muted hover:text-text p-1 transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <form onSubmit={handleEscalateSubmit} className="p-6 space-y-4">
+              <div className="bg-amber-50 border border-amber-200 text-amber-800 p-3 rounded-md text-xs">
+                Escalating <strong>{selectedOverdueItem.asset_code} - {selectedOverdueItem.name}</strong> will send an instant SMS/WhatsApp &amp; Email notification to CFO administrators to request financial audit overrides.
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-navy uppercase mb-1">
+                  Reason for escalation *
+                </label>
+                <textarea
+                  required
+                  rows={3}
+                  value={escalationReason}
+                  onChange={(e) => setEscalationReason(e.target.value)}
+                  placeholder="e.g. Field PM not responding to text messages or phone calls; equipment cannot be physically located."
+                  className="w-full p-2.5 border border-border rounded-md text-xs bg-background focus:outline-none focus:border-primary"
+                />
+                <p className="text-[10px] text-text-muted mt-1">
+                  Min 10 characters required. Currently: {escalationReason.length}
+                </p>
+              </div>
+
+              <div className="border-t border-border pt-4 flex justify-end space-x-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedOverdueItem(null);
+                    setEscalationReason('');
+                  }}
+                  className="px-4 h-9 border border-border text-text rounded text-xs font-semibold hover:bg-background transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={escalating || escalationReason.length < 10}
+                  className="px-4 h-9 bg-primary hover:bg-primary/95 text-white rounded text-xs font-semibold transition-colors disabled:opacity-50"
+                >
+                  {escalating ? 'Sending Escalation...' : 'Confirm Escalation'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
