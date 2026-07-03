@@ -88,11 +88,14 @@ export interface Request {
   site_location?: string;
   needed_from: string;
   needed_until?: string;
-  status: 'pending' | 'approved' | 'rejected' | 'fulfilled' | 'returned' | 'cancelled';
+  status: 'pending' | 'approved' | 'rejected' | 'fulfilled' | 'returned' | 'cancelled' | 'changes_requested' | 'superseded';
   routed_to: 'warehouse_manager' | 'cfo';
   approved_by?: string;
   approved_at?: string;
   rejection_reason?: string;
+  reviewer_note?: string;
+  revision_number?: number;
+  parent_id?: string;
   created_at: string;
   // UI helpers
   requested_by_name?: string;
@@ -247,10 +250,14 @@ export interface CashAdvance {
   purpose: string;
   amount_requested_ugx: number;
   expected_retirement_date: string;
-  status: 'pending' | 'approved' | 'rejected' | 'disbursed' | 'partially_retired' | 'retired' | 'overdue';
+  status: 'pending' | 'approved' | 'rejected' | 'disbursed' | 'partially_retired' | 'retired' | 'overdue' | 'changes_requested' | 'superseded';
   approved_by?: string;
   approved_at?: string;
   rejection_reason?: string;
+  reviewer_note?: string;
+  revision_number?: number;
+  parent_id?: string;
+  md_consultation_note?: string;
   created_at: string;
   // UI helpers
   requested_by_name?: string;
@@ -308,6 +315,24 @@ export interface ProjectAssignment {
   role_on_project: 'coordinator' | 'pm';
   assigned_at: string;
   unassigned_at?: string;
+}
+
+export interface RequestEndorsement {
+  id: string;
+  company_id: string;
+  request_id: string;
+  endorsed_by: string;
+  note?: string;
+  created_at: string;
+}
+
+export interface AdvanceEndorsement {
+  id: string;
+  company_id: string;
+  advance_id: string;
+  endorsed_by: string;
+  note?: string;
+  created_at: string;
 }
 
 // Initial Mock Seed Data
@@ -541,6 +566,8 @@ function getDbState() {
     if (!parsed.reportExports) parsed.reportExports = [];
     if (!parsed.projects) parsed.projects = [];
     if (!parsed.projectAssignments) parsed.projectAssignments = [];
+    if (!parsed.requestEndorsements) parsed.requestEndorsements = [];
+    if (!parsed.advanceEndorsements) parsed.advanceEndorsements = [];
     return parsed;
   }
 
@@ -710,6 +737,8 @@ function getDbState() {
     cashAdvances: mockCashAdvances,
     disbursements: mockDisbursements,
     retirementEntries: mockRetirementEntries,
+    requestEndorsements: [] as RequestEndorsement[],
+    advanceEndorsements: [] as AdvanceEndorsement[],
     sequences: {
       'cat11111-1111-1111-1111-111111111111': 2,
       'cat22222-2222-2222-2222-222222222222': 2,
@@ -2400,5 +2429,172 @@ export const mockDb = {
     if (!assignment) throw new Error('Assignment not found');
     assignment.unassigned_at = new Date().toISOString();
     saveDbState(state);
+  },
+
+  endorseRequest: async (requestId: string, pmId: string, note?: string): Promise<RequestEndorsement> => {
+    const state = getDbState();
+    const id = 're_' + Math.random().toString(36).substr(2, 9);
+    const endorsement: RequestEndorsement = {
+      id,
+      company_id: MOCK_COMPANY_ID,
+      request_id: requestId,
+      endorsed_by: pmId,
+      note,
+      created_at: new Date().toISOString()
+    };
+    if (!state.requestEndorsements) state.requestEndorsements = [];
+    state.requestEndorsements = state.requestEndorsements.filter((e: RequestEndorsement) => e.request_id !== requestId);
+    state.requestEndorsements.push(endorsement);
+    saveDbState(state);
+    return endorsement;
+  },
+
+  getRequestEndorsement: async (requestId: string): Promise<RequestEndorsement | null> => {
+    const state = getDbState();
+    return (state.requestEndorsements || []).find((e: RequestEndorsement) => e.request_id === requestId) || null;
+  },
+
+  endorseAdvance: async (advanceId: string, pmId: string, note?: string): Promise<AdvanceEndorsement> => {
+    const state = getDbState();
+    const id = 'ae_' + Math.random().toString(36).substr(2, 9);
+    const endorsement: AdvanceEndorsement = {
+      id,
+      company_id: MOCK_COMPANY_ID,
+      advance_id: advanceId,
+      endorsed_by: pmId,
+      note,
+      created_at: new Date().toISOString()
+    };
+    if (!state.advanceEndorsements) state.advanceEndorsements = [];
+    state.advanceEndorsements = state.advanceEndorsements.filter((e: AdvanceEndorsement) => e.advance_id !== advanceId);
+    state.advanceEndorsements.push(endorsement);
+    saveDbState(state);
+    return endorsement;
+  },
+
+  getAdvanceEndorsement: async (advanceId: string): Promise<AdvanceEndorsement | null> => {
+    const state = getDbState();
+    return (state.advanceEndorsements || []).find((e: AdvanceEndorsement) => e.advance_id === advanceId) || null;
+  },
+
+  requestChangesOnRequest: async (requestId: string, reviewerNote: string): Promise<Request> => {
+    const state = getDbState();
+    const req = (state.requests || []).find((r: Request) => r.id === requestId);
+    if (!req) throw new Error('Request not found');
+    req.status = 'changes_requested';
+    req.reviewer_note = reviewerNote;
+    saveDbState(state);
+    return req;
+  },
+
+  requestChangesOnAdvance: async (advanceId: string, reviewerNote: string): Promise<CashAdvance> => {
+    const state = getDbState();
+    const adv = (state.cashAdvances || []).find((a: CashAdvance) => a.id === advanceId);
+    if (!adv) throw new Error('Advance not found');
+    adv.status = 'changes_requested';
+    adv.reviewer_note = reviewerNote;
+    saveDbState(state);
+    return adv;
+  },
+
+  resubmitRequest: async (parentRequestId: string, items: Array<{ equipment_id?: string; consumable_id?: string; quantity_requested: number }>): Promise<Request> => {
+    const state = getDbState();
+    const parent = (state.requests || []).find((r: Request) => r.id === parentRequestId);
+    if (!parent) throw new Error('Parent request not found');
+
+    parent.status = 'superseded';
+
+    const requestId = 'req_' + Math.random().toString(36).substr(2, 9);
+    const threshold = state.settings.approval_threshold_ugx;
+    let routesToCfo = false;
+    const requestItemsToSave: RequestItem[] = [];
+
+    for (const item of items) {
+      if (item.equipment_id) {
+        const eq = state.equipment.find((e: Equipment) => e.id === item.equipment_id);
+        if (!eq) {
+          routesToCfo = true;
+          continue;
+        }
+        if (eq.unit_value_ugx >= threshold) routesToCfo = true;
+        if (eq.status !== 'available') routesToCfo = true;
+        const availableSameModel = state.equipment.filter((e: Equipment) => e.name === eq.name && e.status === 'available');
+        if (availableSameModel.length <= 1) routesToCfo = true;
+
+        requestItemsToSave.push({
+          id: 'ri_' + Math.random().toString(36).substr(2, 9),
+          request_id: requestId,
+          equipment_id: item.equipment_id,
+          quantity_requested: 1
+        });
+      } else if (item.consumable_id) {
+        const con = state.consumables.find((c: ConsumableStock) => c.id === item.consumable_id);
+        if (!con) {
+          routesToCfo = true;
+          continue;
+        }
+        if (con.unit_value_ugx >= threshold) routesToCfo = true;
+        if (con.quantity_on_hand < item.quantity_requested) routesToCfo = true;
+        if (con.quantity_on_hand - item.quantity_requested < 1) routesToCfo = true;
+
+        requestItemsToSave.push({
+          id: 'ri_' + Math.random().toString(36).substr(2, 9),
+          request_id: requestId,
+          consumable_id: item.consumable_id,
+          quantity_requested: item.quantity_requested
+        });
+      }
+    }
+
+    const newRequest: Request = {
+      ...parent,
+      id: requestId,
+      status: 'pending',
+      routed_to: routesToCfo ? 'cfo' : 'warehouse_manager',
+      revision_number: (parent.revision_number || 1) + 1,
+      parent_id: parentRequestId,
+      reviewer_note: undefined,
+      created_at: new Date().toISOString()
+    };
+
+    state.requests.push(newRequest);
+    state.requestItems.push(...requestItemsToSave);
+    saveDbState(state);
+    return newRequest;
+  },
+
+  resubmitAdvance: async (parentAdvanceId: string, purpose: string, amount: number, expectedRetirementDate: string): Promise<CashAdvance> => {
+    const state = getDbState();
+    const parent = (state.cashAdvances || []).find((a: CashAdvance) => a.id === parentAdvanceId);
+    if (!parent) throw new Error('Parent cash advance not found');
+
+    parent.status = 'superseded';
+
+    const id = 'adv_' + Math.random().toString(36).substr(2, 9);
+    const newAdv: CashAdvance = {
+      ...parent,
+      id,
+      purpose,
+      amount_requested_ugx: amount,
+      expected_retirement_date: expectedRetirementDate,
+      status: 'pending',
+      revision_number: (parent.revision_number || 1) + 1,
+      parent_id: parentAdvanceId,
+      reviewer_note: undefined,
+      created_at: new Date().toISOString()
+    };
+
+    state.cashAdvances.push(newAdv);
+    saveDbState(state);
+    return newAdv;
+  },
+
+  saveMdConsultationNote: async (advanceId: string, note: string): Promise<CashAdvance> => {
+    const state = getDbState();
+    const adv = (state.cashAdvances || []).find((a: CashAdvance) => a.id === advanceId);
+    if (!adv) throw new Error('Advance not found');
+    adv.md_consultation_note = note;
+    saveDbState(state);
+    return adv;
   }
 };

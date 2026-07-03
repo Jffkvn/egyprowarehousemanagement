@@ -2,9 +2,9 @@
 // Delegates queries to Supabase if configured, or falls back to Mock LocalStorage.
 
 import { supabase } from './supabaseClient';
-import { mockDb, User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport, CashAdvance, Disbursement, RetirementEntry, Project, ProjectAssignment } from './mockDb';
+import { mockDb, User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport, CashAdvance, Disbursement, RetirementEntry, Project, ProjectAssignment, RequestEndorsement, AdvanceEndorsement } from './mockDb';
 
-export type { User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport, CashAdvance, Disbursement, RetirementEntry, Project, ProjectAssignment };
+export type { User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport, CashAdvance, Disbursement, RetirementEntry, Project, ProjectAssignment, RequestEndorsement, AdvanceEndorsement };
 
 // Helper to determine if we should use Supabase or fallback to mock
 const useSupabase = () => {
@@ -1717,8 +1717,264 @@ export const db = {
       if (error) throw error;
     } catch (e: any) {
       if (useSupabase()) throw e;
-      console.warn('Supabase unassignUserFromProject failed, using mock database:', e);
       return mockDb.unassignUserFromProject(assignmentId);
+    }
+  },
+
+  endorseRequest: async (requestId: string, pmId: string, note?: string): Promise<RequestEndorsement> => {
+    if (!useSupabase()) {
+      return mockDb.endorseRequest(requestId, pmId, note);
+    }
+    try {
+      const companyId = await getCompanyId();
+      const { data, error } = await supabase!
+        .from('request_endorsements')
+        .insert([{
+          company_id: companyId,
+          request_id: requestId,
+          endorsed_by: pmId,
+          note
+        }])
+        .select()
+        .single();
+      if (error) throw error;
+      return data as RequestEndorsement;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase endorseRequest failed, using mock database:', e);
+      return mockDb.endorseRequest(requestId, pmId, note);
+    }
+  },
+
+  getRequestEndorsement: async (requestId: string): Promise<RequestEndorsement | null> => {
+    if (!useSupabase()) {
+      return mockDb.getRequestEndorsement(requestId);
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('request_endorsements')
+        .select('*')
+        .eq('request_id', requestId)
+        .maybeSingle();
+      if (error) throw error;
+      return data as RequestEndorsement | null;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase getRequestEndorsement failed, using mock database:', e);
+      return mockDb.getRequestEndorsement(requestId);
+    }
+  },
+
+  endorseAdvance: async (advanceId: string, pmId: string, note?: string): Promise<AdvanceEndorsement> => {
+    if (!useSupabase()) {
+      return mockDb.endorseAdvance(advanceId, pmId, note);
+    }
+    try {
+      const companyId = await getCompanyId();
+      const { data, error } = await supabase!
+        .from('advance_endorsements')
+        .insert([{
+          company_id: companyId,
+          advance_id: advanceId,
+          endorsed_by: pmId,
+          note
+        }])
+        .select()
+        .single();
+      if (error) throw error;
+      return data as AdvanceEndorsement;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase endorseAdvance failed, using mock database:', e);
+      return mockDb.endorseAdvance(advanceId, pmId, note);
+    }
+  },
+
+  getAdvanceEndorsement: async (advanceId: string): Promise<AdvanceEndorsement | null> => {
+    if (!useSupabase()) {
+      return mockDb.getAdvanceEndorsement(advanceId);
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('advance_endorsements')
+        .select('*')
+        .eq('advance_id', advanceId)
+        .maybeSingle();
+      if (error) throw error;
+      return data as AdvanceEndorsement | null;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase getAdvanceEndorsement failed, using mock database:', e);
+      return mockDb.getAdvanceEndorsement(advanceId);
+    }
+  },
+
+  requestChangesOnRequest: async (requestId: string, reviewerNote: string): Promise<Request> => {
+    if (!useSupabase()) {
+      return mockDb.requestChangesOnRequest(requestId, reviewerNote);
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('requests')
+        .update({
+          status: 'changes_requested',
+          reviewer_note: reviewerNote
+        })
+        .eq('id', requestId)
+        .select()
+        .single();
+      if (error) throw error;
+      return data as Request;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase requestChangesOnRequest failed, using mock database:', e);
+      return mockDb.requestChangesOnRequest(requestId, reviewerNote);
+    }
+  },
+
+  requestChangesOnAdvance: async (advanceId: string, reviewerNote: string): Promise<CashAdvance> => {
+    if (!useSupabase()) {
+      return mockDb.requestChangesOnAdvance(advanceId, reviewerNote);
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('cash_advances')
+        .update({
+          status: 'changes_requested',
+          reviewer_note: reviewerNote
+        })
+        .eq('id', advanceId)
+        .select()
+        .single();
+      if (error) throw error;
+      return data as CashAdvance;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase requestChangesOnAdvance failed, using mock database:', e);
+      return mockDb.requestChangesOnAdvance(advanceId, reviewerNote);
+    }
+  },
+
+  resubmitRequest: async (parentRequestId: string, items: Array<{ equipment_id?: string; consumable_id?: string; quantity_requested: number }>): Promise<Request> => {
+    if (!useSupabase()) {
+      return mockDb.resubmitRequest(parentRequestId, items);
+    }
+    try {
+      const companyId = await getCompanyId();
+      
+      const { data: parent, error: getParentError } = await supabase!
+        .from('requests')
+        .select('*')
+        .eq('id', parentRequestId)
+        .single();
+      if (getParentError || !parent) throw new Error('Parent request load failed');
+
+      const { error: supError } = await supabase!
+        .from('requests')
+        .update({ status: 'superseded' })
+        .eq('id', parentRequestId);
+      if (supError) throw supError;
+
+      const { data, error } = await supabase!
+        .from('requests')
+        .insert([{
+          company_id: companyId,
+          requested_by: parent.requested_by,
+          project_id: parent.project_id,
+          project_name: parent.project_name,
+          site_location: parent.site_location,
+          needed_from: parent.needed_from,
+          needed_until: parent.needed_until,
+          status: 'pending',
+          routed_to: 'warehouse_manager',
+          revision_number: (parent.revision_number || 1) + 1,
+          parent_id: parentRequestId
+        }])
+        .select()
+        .single();
+      if (error) throw error;
+
+      const itemsToSubmit = items.map(item => ({
+        request_id: data.id,
+        equipment_id: item.equipment_id,
+        consumable_id: item.consumable_id,
+        quantity_requested: item.quantity_requested
+      }));
+      const { error: itemsError } = await supabase!
+        .from('request_items')
+        .insert(itemsToSubmit);
+      if (itemsError) throw itemsError;
+
+      return data as Request;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase resubmitRequest failed, using mock database:', e);
+      return mockDb.resubmitRequest(parentRequestId, items);
+    }
+  },
+
+  resubmitAdvance: async (parentAdvanceId: string, purpose: string, amount: number, expectedRetirementDate: string): Promise<CashAdvance> => {
+    if (!useSupabase()) {
+      return mockDb.resubmitAdvance(parentAdvanceId, purpose, amount, expectedRetirementDate);
+    }
+    try {
+      const companyId = await getCompanyId();
+      
+      const { data: parent, error: getParentError } = await supabase!
+        .from('cash_advances')
+        .select('*')
+        .eq('id', parentAdvanceId)
+        .single();
+      if (getParentError || !parent) throw new Error('Parent cash advance load failed');
+
+      const { error: supError } = await supabase!
+        .from('cash_advances')
+        .update({ status: 'superseded' })
+        .eq('id', parentAdvanceId);
+      if (supError) throw supError;
+
+      const { data, error } = await supabase!
+        .from('cash_advances')
+        .insert([{
+          company_id: companyId,
+          requested_by: parent.requested_by,
+          project_id: parent.project_id,
+          project_name: parent.project_name,
+          purpose,
+          amount_requested_ugx: amount,
+          expected_retirement_date: expectedRetirementDate,
+          status: 'pending',
+          revision_number: (parent.revision_number || 1) + 1,
+          parent_id: parentAdvanceId
+        }])
+        .select()
+        .single();
+      if (error) throw error;
+      return data as CashAdvance;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase resubmitAdvance failed, using mock database:', e);
+      return mockDb.resubmitAdvance(parentAdvanceId, purpose, amount, expectedRetirementDate);
+    }
+  },
+
+  saveMdConsultationNote: async (advanceId: string, note: string): Promise<CashAdvance> => {
+    if (!useSupabase()) {
+      return mockDb.saveMdConsultationNote(advanceId, note);
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('cash_advances')
+        .update({ md_consultation_note: note })
+        .eq('id', advanceId)
+        .select()
+        .single();
+      if (error) throw error;
+      return data as CashAdvance;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase saveMdConsultationNote failed, using mock database:', e);
+      return mockDb.saveMdConsultationNote(advanceId, note);
     }
   }
 };
