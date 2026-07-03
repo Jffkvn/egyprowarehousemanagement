@@ -2106,7 +2106,7 @@ export const mockDb = {
     const advances = state.cashAdvances || [];
     
     // Filter based on role
-    const filtered = role === 'cfo' 
+    const filtered = (role === 'cfo' || role === 'md') 
       ? advances 
       : advances.filter((a: CashAdvance) => a.requested_by === userId);
 

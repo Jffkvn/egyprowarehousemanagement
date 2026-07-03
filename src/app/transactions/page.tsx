@@ -15,7 +15,7 @@ export default function TransactionsPage() {
   const [search, setSearch] = useState('');
 
   useEffect(() => {
-    if (user && user.role === 'pm') {
+    if (user && (user.role === 'pm' || user.role === 'coordinator')) {
       router.push('/dashboard');
       return;
     }

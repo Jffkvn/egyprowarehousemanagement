@@ -62,7 +62,7 @@ function DamageReportsContent() {
   };
 
   useEffect(() => {
-    if (user && user.role === 'pm') {
+    if (user && (user.role === 'pm' || user.role === 'coordinator' || user.role === 'md')) {
       router.push('/dashboard');
       return;
     }

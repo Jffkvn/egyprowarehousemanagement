@@ -107,25 +107,25 @@ export default function Shell({ children }: ShellProps) {
       name: 'Dashboard',
       href: '/dashboard',
       icon: LayoutDashboard,
-      roles: ['pm', 'warehouse_manager', 'cfo']
+      roles: ['coordinator', 'pm', 'warehouse_manager', 'cfo', 'md']
     },
     {
       name: 'Cash Advances',
       href: '/advances',
       icon: Coins,
-      roles: ['pm', 'cfo']
+      roles: ['coordinator', 'pm', 'cfo', 'md']
     },
     {
       name: 'New Request',
       href: '/requests/new',
       icon: PlusCircle,
-      roles: ['pm']
+      roles: ['coordinator', 'pm']
     },
     {
       name: 'Equipment Catalog',
       href: '/equipment',
       icon: Package,
-      roles: ['pm', 'warehouse_manager', 'cfo']
+      roles: ['coordinator', 'pm', 'warehouse_manager', 'cfo', 'md']
     },
     {
       name: 'Receive Stock (GRN)',
@@ -149,13 +149,13 @@ export default function Shell({ children }: ShellProps) {
       name: 'Audit Logs',
       href: '/transactions',
       icon: History,
-      roles: ['warehouse_manager', 'cfo']
+      roles: ['warehouse_manager', 'cfo', 'md']
     },
     {
       name: 'Reports',
       href: '/reports',
       icon: FileSpreadsheet,
-      roles: ['cfo']
+      roles: ['cfo', 'md']
     },
     {
       name: 'Settings',
@@ -365,7 +365,9 @@ export default function Shell({ children }: ShellProps) {
             <span className={`px-2.5 py-1 text-xs font-semibold rounded-full border
               ${user.role === 'cfo' ? 'bg-danger/10 text-danger border-danger/20' : ''}
               ${user.role === 'warehouse_manager' ? 'bg-navy/10 text-navy border-navy/20' : ''}
-              ${user.role === 'pm' ? 'bg-primary/10 text-primary border-primary/20' : ''}
+              ${user.role === 'pm' ? 'bg-success/10 text-success border-success/20' : ''}
+              ${user.role === 'coordinator' ? 'bg-primary/10 text-primary border-primary/20' : ''}
+              ${user.role === 'md' ? 'bg-warning/10 text-warning border-warning/20' : ''}
             `}>
               {roleLabels[user.role]}
             </span>

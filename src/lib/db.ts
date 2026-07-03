@@ -1376,7 +1376,7 @@ export const db = {
         .eq('company_id', companyId)
         .order('created_at', { ascending: false });
 
-      if (role === 'pm') {
+      if (role === 'pm' || role === 'coordinator') {
         query = query.eq('requested_by', userId);
       }
 

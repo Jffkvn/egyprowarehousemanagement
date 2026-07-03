@@ -386,7 +386,7 @@ export default function AdvancesPage() {
       )}
 
       {/* PM Lock Banner */}
-      {currentUser.role === 'pm' && hasOverdueLock && (
+      {currentUser.role === 'coordinator' && hasOverdueLock && (
         <div className="p-4 border rounded-lg bg-danger-tint border-danger/25 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
           <div className="flex items-start gap-3">
             <div className="p-2 bg-danger-tint rounded border border-danger/20 text-danger">
@@ -474,11 +474,11 @@ export default function AdvancesPage() {
       )}
 
       {/* PM Actions & CFO Advances Tab */}
-      {(currentUser.role === 'pm' || activeTab === 'advances') && (
+      {((currentUser.role === 'coordinator' || currentUser.role === 'pm') || activeTab === 'advances') && (
         <div className="bg-surface border border-border rounded-lg overflow-hidden shadow-sm">
           <div className="p-4 border-b border-border flex items-center justify-between gap-4">
             <h2 className="text-sm font-bold text-navy">Cash Advance Tracking Ledger</h2>
-            {currentUser.role === 'pm' && (
+            {currentUser.role === 'coordinator' && (
               <button
                 disabled={hasOverdueLock}
                 onClick={() => setShowRequestModal(true)}
@@ -1102,7 +1102,7 @@ export default function AdvancesPage() {
               </div>
 
               {/* PM Expense Append Form */}
-              {currentUser.role === 'pm' && ['disbursed', 'partially_retired', 'overdue'].includes(selectedAdvance.status) && (
+              {currentUser.role === 'coordinator' && ['disbursed', 'partially_retired', 'overdue'].includes(selectedAdvance.status) && (
                 <div className="p-4 border border-border rounded-md bg-background/50 space-y-4">
                   <h4 className="text-xs font-bold text-navy flex items-center gap-1.5">
                     <Plus className="w-4.5 h-4.5 text-primary" />
