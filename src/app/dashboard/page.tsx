@@ -5,6 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import PMDashboard from '@/components/dashboard/PMDashboard';
 import WMDashboard from '@/components/dashboard/WMDashboard';
 import CFODashboard from '@/components/dashboard/CFODashboard';
+import MDDashboard from '@/components/dashboard/MDDashboard';
 
 export default function DashboardRoute() {
   const { user, loading } = useAuth();
@@ -33,6 +34,10 @@ export default function DashboardRoute() {
       return <WMDashboard />;
     case 'pm':
       return <PMDashboard />;
+    case 'coordinator':
+      return <PMDashboard />;
+    case 'md':
+      return <MDDashboard />;
     default:
       return (
         <div className="text-center py-24 bg-surface border border-border rounded-lg">
