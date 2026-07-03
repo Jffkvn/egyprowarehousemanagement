@@ -86,7 +86,8 @@ CREATE TABLE requests (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id UUID NOT NULL REFERENCES companies(id),
   requested_by UUID NOT NULL REFERENCES users(id),
-  project_name TEXT NOT NULL,
+  project_id UUID REFERENCES projects(id),
+  project_name TEXT,
   site_location TEXT,
   needed_from DATE NOT NULL,
   needed_until DATE,
@@ -95,7 +96,8 @@ CREATE TABLE requests (
   approved_by UUID REFERENCES users(id),
   approved_at TIMESTAMPTZ,
   rejection_reason TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT project_reference_chk CHECK (project_id IS NOT NULL OR project_name IS NOT NULL)
 );
 
 -- Request Items Table
@@ -1071,7 +1073,8 @@ CREATE TABLE IF NOT EXISTS cash_advances (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
   requested_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  project_name TEXT NOT NULL,
+  project_id UUID REFERENCES projects(id),
+  project_name TEXT,
   purpose TEXT NOT NULL,
   amount_requested_ugx NUMERIC(15, 2) NOT NULL CHECK (amount_requested_ugx > 0),
   expected_retirement_date DATE NOT NULL,
@@ -1079,7 +1082,8 @@ CREATE TABLE IF NOT EXISTS cash_advances (
   approved_by UUID REFERENCES users(id) ON DELETE SET NULL,
   approved_at TIMESTAMPTZ,
   rejection_reason TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT project_reference_chk CHECK (project_id IS NOT NULL OR project_name IS NOT NULL)
 );
 
 -- Table: advance_disbursements

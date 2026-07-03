@@ -83,7 +83,8 @@ export interface Request {
   id: string;
   company_id: string;
   requested_by: string;
-  project_name: string;
+  project_id?: string;
+  project_name?: string;
   site_location?: string;
   needed_from: string;
   needed_until?: string;
@@ -241,7 +242,8 @@ export interface CashAdvance {
   id: string;
   company_id: string;
   requested_by: string;
-  project_name: string;
+  project_id?: string;
+  project_name?: string;
   purpose: string;
   amount_requested_ugx: number;
   expected_retirement_date: string;
@@ -1014,8 +1016,15 @@ export const mockDb = {
       }
     }
 
+    let projectName = request.project_name;
+    if (request.project_id && !projectName) {
+      const proj = (state.projects || []).find((p: Project) => p.id === request.project_id);
+      if (proj) projectName = proj.name;
+    }
+
     const newRequest: Request = {
       ...request,
+      project_name: projectName,
       id: requestId,
       company_id: MOCK_COMPANY_ID,
       status: 'pending',
@@ -2113,13 +2122,20 @@ export const mockDb = {
       throw new Error('Blocked: You have overdue cash advances that must be accounted for first.');
     }
 
+    let projectName = advance.project_name;
+    if (advance.project_id && !projectName) {
+      const proj = (state.projects || []).find((p: Project) => p.id === advance.project_id);
+      if (proj) projectName = proj.name;
+    }
+
     const id = 'adv_' + Math.random().toString(36).substr(2, 9);
     const newAdv: CashAdvance = {
+      ...advance,
+      project_name: projectName,
       id,
       company_id: MOCK_COMPANY_ID,
       status: 'pending',
-      created_at: new Date().toISOString(),
-      ...advance
+      created_at: new Date().toISOString()
     };
 
     if (!state.cashAdvances) state.cashAdvances = [];
