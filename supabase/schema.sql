@@ -1604,5 +1604,82 @@ CREATE POLICY advance_endorsements_insert ON advance_endorsements
   );
 
 
+-- =========================================================================
+-- DAILY FIELD UPDATES (Roles, Projects & Notifications Update)
+-- =========================================================================
+
+CREATE TABLE daily_updates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id),
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  submitted_by UUID NOT NULL REFERENCES users(id),
+  update_date DATE NOT NULL,
+  summary TEXT NOT NULL,
+  photo_urls TEXT[] NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT unique_project_user_date UNIQUE (project_id, submitted_by, update_date)
+);
+
+ALTER TABLE daily_updates ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY daily_updates_select ON daily_updates
+  FOR SELECT USING (
+    company_id = get_current_user_company() AND (
+      get_current_user_role() IN ('cfo', 'md', 'warehouse_manager') OR
+      submitted_by = auth.uid() OR
+      EXISTS (
+        SELECT 1 FROM project_assignments pa
+        WHERE pa.project_id = daily_updates.project_id
+          AND pa.user_id = auth.uid()
+      )
+    )
+  );
+
+CREATE POLICY daily_updates_insert ON daily_updates
+  FOR INSERT WITH CHECK (
+    company_id = get_current_user_company() AND
+    get_current_user_role() = 'coordinator' AND
+    submitted_by = auth.uid() AND
+    EXISTS (
+      SELECT 1 FROM project_assignments pa
+      WHERE pa.project_id = daily_updates.project_id
+        AND pa.user_id = auth.uid()
+        AND pa.unassigned_at IS NULL
+    )
+  );
+
+-- Missed updates helper RPC
+CREATE OR REPLACE FUNCTION rpc_check_missed_daily_updates(p_date DATE)
+RETURNS TABLE (
+  project_id UUID,
+  project_name TEXT,
+  user_id UUID,
+  user_full_name TEXT
+) AS $$
+BEGIN
+  RETURN QUERY
+  SELECT 
+    p.id AS project_id,
+    p.name AS project_name,
+    pa.user_id AS user_id,
+    u.full_name AS user_full_name
+  FROM project_assignments pa
+  JOIN projects p ON pa.project_id = p.id
+  JOIN users u ON pa.user_id = u.id
+  WHERE p.status = 'active'
+    AND pa.role_on_project = 'coordinator'
+    AND pa.assigned_at::date <= p_date
+    AND (pa.unassigned_at IS NULL OR pa.unassigned_at::date >= p_date)
+    AND NOT EXISTS (
+      SELECT 1 FROM daily_updates du
+      WHERE du.project_id = pa.project_id
+        AND du.submitted_by = pa.user_id
+        AND du.update_date = p_date
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
+
 
 
