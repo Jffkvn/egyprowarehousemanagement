@@ -336,10 +336,30 @@ const MOCK_USERS: User[] = [
   {
     id: 'u3333333-3333-3333-3333-333333333333',
     company_id: MOCK_COMPANY_ID,
-    full_name: 'Sarah Project Manager',
-    email: 'pm@egypro.com',
-    role: 'pm',
+    full_name: 'Sarah Coordinator',
+    email: 'coordinator@egypro.com', // also update email for consistency
+    role: 'coordinator',
     phone: '+256 703 123456',
+    is_active: true,
+    created_at: new Date().toISOString()
+  },
+  {
+    id: 'u4444444-4444-4444-4444-444444444444',
+    company_id: MOCK_COMPANY_ID,
+    full_name: 'Peter PM Supervisor',
+    email: 'pm@egypro.com', // reuse pm@egypro.com to avoid breaking existing login tests
+    role: 'pm',
+    phone: '+256 704 123456',
+    is_active: true,
+    created_at: new Date().toISOString()
+  },
+  {
+    id: 'u5555555-5555-5555-5555-555555555555',
+    company_id: MOCK_COMPANY_ID,
+    full_name: 'Mary Managing Director',
+    email: 'md@egypro.com',
+    role: 'md',
+    phone: '+256 705 123456',
     is_active: true,
     created_at: new Date().toISOString()
   }

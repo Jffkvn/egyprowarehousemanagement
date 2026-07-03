@@ -1,7 +1,7 @@
 -- Supabase Database Schema for Egypro EquipTrack (Phase One)
 
 -- 1. ENUMS AND TYPES
-CREATE TYPE user_role AS ENUM ('pm', 'warehouse_manager', 'cfo');
+CREATE TYPE user_role AS ENUM ('coordinator', 'pm', 'warehouse_manager', 'cfo', 'md');
 CREATE TYPE category_item_type AS ENUM ('reusable', 'consumable');
 CREATE TYPE equipment_status AS ENUM ('available', 'checked_out', 'overdue', 'under_repair', 'retired', 'pending_inspection');
 CREATE TYPE request_status AS ENUM ('pending', 'approved', 'rejected', 'fulfilled', 'returned', 'cancelled');
