@@ -4,7 +4,7 @@
 CREATE TYPE user_role AS ENUM ('coordinator', 'pm', 'warehouse_manager', 'cfo', 'md');
 CREATE TYPE category_item_type AS ENUM ('reusable', 'consumable');
 CREATE TYPE equipment_status AS ENUM ('available', 'checked_out', 'overdue', 'under_repair', 'retired', 'pending_inspection');
-CREATE TYPE request_status AS ENUM ('pending', 'approved', 'rejected', 'fulfilled', 'returned', 'cancelled');
+CREATE TYPE request_status AS ENUM ('pending', 'approved', 'rejected', 'fulfilled', 'returned', 'cancelled', 'changes_requested', 'superseded');
 CREATE TYPE route_target AS ENUM ('warehouse_manager', 'cfo');
 CREATE TYPE transaction_type_enum AS ENUM ('checkout', 'return', 'stock_added', 'stock_consumed', 'retired', 'sent_for_repair', 'returned_from_repair');
 CREATE TYPE condition_type AS ENUM ('good', 'damaged', 'missing_parts', 'non_functional');
@@ -96,6 +96,9 @@ CREATE TABLE requests (
   approved_by UUID REFERENCES users(id),
   approved_at TIMESTAMPTZ,
   rejection_reason TEXT,
+  reviewer_note TEXT,
+  revision_number INTEGER NOT NULL DEFAULT 1,
+  parent_id UUID REFERENCES requests(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT project_reference_chk CHECK (project_id IS NOT NULL OR project_name IS NOT NULL)
 );
@@ -1057,7 +1060,7 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'advance_status') THEN
-    CREATE TYPE advance_status AS ENUM ('pending', 'approved', 'rejected', 'disbursed', 'partially_retired', 'retired', 'overdue');
+    CREATE TYPE advance_status AS ENUM ('pending', 'approved', 'rejected', 'disbursed', 'partially_retired', 'retired', 'overdue', 'changes_requested', 'superseded');
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'disbursement_method') THEN
     CREATE TYPE disbursement_method AS ENUM ('bank_transfer', 'cash');
@@ -1082,6 +1085,10 @@ CREATE TABLE IF NOT EXISTS cash_advances (
   approved_by UUID REFERENCES users(id) ON DELETE SET NULL,
   approved_at TIMESTAMPTZ,
   rejection_reason TEXT,
+  reviewer_note TEXT,
+  revision_number INTEGER NOT NULL DEFAULT 1,
+  parent_id UUID REFERENCES cash_advances(id),
+  md_consultation_note TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT project_reference_chk CHECK (project_id IS NOT NULL OR project_name IS NOT NULL)
 );
@@ -1549,6 +1556,53 @@ CREATE POLICY project_assignments_update ON project_assignments
   FOR UPDATE USING (
     company_id = get_current_user_company() AND get_current_user_role() = 'cfo'
   );
+
+
+-- =========================================================================
+-- PM ENDORSEMENTS (Roles, Projects & Notifications Update)
+-- =========================================================================
+
+CREATE TABLE request_endorsements (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id),
+  request_id UUID NOT NULL REFERENCES requests(id) ON DELETE CASCADE UNIQUE,
+  endorsed_by UUID NOT NULL REFERENCES users(id),
+  note TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE advance_endorsements (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id),
+  advance_id UUID NOT NULL REFERENCES cash_advances(id) ON DELETE CASCADE UNIQUE,
+  endorsed_by UUID NOT NULL REFERENCES users(id),
+  note TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE request_endorsements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE advance_endorsements ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY request_endorsements_select ON request_endorsements
+  FOR SELECT USING (
+    company_id = get_current_user_company()
+  );
+
+CREATE POLICY request_endorsements_insert ON request_endorsements
+  FOR INSERT WITH CHECK (
+    company_id = get_current_user_company() AND get_current_user_role() = 'pm'
+  );
+
+CREATE POLICY advance_endorsements_select ON advance_endorsements
+  FOR SELECT USING (
+    company_id = get_current_user_company()
+  );
+
+CREATE POLICY advance_endorsements_insert ON advance_endorsements
+  FOR INSERT WITH CHECK (
+    company_id = get_current_user_company() AND get_current_user_role() = 'pm'
+  );
+
 
 
 
