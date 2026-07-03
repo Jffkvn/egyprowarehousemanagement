@@ -85,7 +85,7 @@ export default function PMDashboard() {
   }, [user]);
 
   const filteredRequests = requests.filter(r => 
-    r.project_name.toLowerCase().includes(search.toLowerCase()) ||
+    (r.project_name || '').toLowerCase().includes(search.toLowerCase()) ||
     (r.site_location && r.site_location.toLowerCase().includes(search.toLowerCase()))
   );
 

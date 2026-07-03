@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { db, Equipment, ConsumableStock, Category } from '@/lib/db';
+import { db, Equipment, ConsumableStock, Category, Project } from '@/lib/db';
 import { useRouter } from 'next/navigation';
 import { Plus, Trash2, Calendar, MapPin, ClipboardList, Check } from 'lucide-react';
 
@@ -22,6 +22,8 @@ export default function NewRequestPage() {
   const { user } = useAuth();
   const router = useRouter();
 
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState('');
   const [projectName, setProjectName] = useState('');
   const [siteLocation, setSiteLocation] = useState('');
   const [neededFrom, setNeededFrom] = useState('');
@@ -43,17 +45,33 @@ export default function NewRequestPage() {
         const eqs = await db.getEquipment();
         const cons = await db.getConsumables();
         const cats = await db.getCategories();
+        const projs = await db.getProjects();
         
         // Show only available equipment
         setAvailableEquipment(eqs.filter(e => e.status === 'available'));
         setAvailableConsumables(cons);
         setCategories(cats);
+        
+        const activeProjs = projs.filter(p => p.status === 'active');
+        setProjects(activeProjs);
+        if (activeProjs.length > 0) {
+          setSelectedProjectId(activeProjs[0].id);
+          setSiteLocation(activeProjs[0].site_location || '');
+        }
       } catch (err) {
         console.error('Error fetching catalog data:', err);
       }
     };
     fetchData();
   }, []);
+
+  const handleProjectChange = (projId: string) => {
+    setSelectedProjectId(projId);
+    const chosen = projects.find(p => p.id === projId);
+    if (chosen) {
+      setSiteLocation(chosen.site_location || '');
+    }
+  };
 
   // Determine if we need the "Needed Until" date (required if any selected item is reusable)
   const hasReusableItem = selectedItems.some(item => item.type === 'reusable');
@@ -132,7 +150,7 @@ export default function NewRequestPage() {
 
       await db.createRequest({
         requested_by: user.id,
-        project_name: projectName,
+        project_id: selectedProjectId,
         site_location: siteLocation || undefined,
         needed_from: neededFrom,
         needed_until: hasReusableItem ? neededUntil : undefined
@@ -181,16 +199,21 @@ export default function NewRequestPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-text mb-1">
-                  Project Name <span className="text-danger">*</span>
+                  Project <span className="text-danger">*</span>
                 </label>
-                <input
-                  type="text"
+                <select
                   required
-                  value={projectName}
-                  onChange={(e) => setProjectName(e.target.value)}
+                  value={selectedProjectId}
+                  onChange={(e) => handleProjectChange(e.target.value)}
                   className="w-full h-10 px-3 border border-border rounded-md text-sm bg-background focus:outline-none focus:border-primary"
-                  placeholder="e.g. ATC Mbarara Site Upgrade"
-                />
+                >
+                  <option value="" disabled>Select active project...</option>
+                  {projects.map((proj) => (
+                    <option key={proj.id} value={proj.id}>
+                      {proj.name}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>

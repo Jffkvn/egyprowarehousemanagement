@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { db, CashAdvance, RetirementEntry, User } from '@/lib/db';
+import { db, CashAdvance, RetirementEntry, User, Project } from '@/lib/db';
 import { Coins, DollarSign, Clock, CheckCircle, XCircle, Plus, FileText, ArrowLeft, AlertTriangle, Eye, Download, User as UserIcon, Calendar, Check, ExternalLink } from 'lucide-react';
 import { StatusBadge } from '@/components/dashboard/PMDashboard';
 import { useAuth } from '@/context/AuthContext';
@@ -22,8 +22,12 @@ export default function AdvancesPage() {
   const [showApproveModal, setShowApproveModal] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(false);
 
+  // Projects State
+  const [projects, setProjects] = useState<Project[]>([]);
+
   // Request Form State
   const [requestForm, setRequestForm] = useState({
+    projectId: '',
     projectName: '',
     purpose: '',
     amountRequested: '',
@@ -62,6 +66,24 @@ export default function AdvancesPage() {
       }
     };
     triggerCheck();
+
+    const fetchProjects = async () => {
+      try {
+        const projs = await db.getProjects();
+        const activeProjs = projs.filter(p => p.status === 'active');
+        setProjects(activeProjs);
+        if (activeProjs.length > 0) {
+          setRequestForm(prev => ({
+            ...prev,
+            projectId: activeProjs[0].id,
+            projectName: activeProjs[0].name
+          }));
+        }
+      } catch (err) {
+        console.warn('Failed to fetch projects:', err);
+      }
+    };
+    fetchProjects();
 
     if (currentUser) {
       fetchAdvances(currentUser);
@@ -104,14 +126,14 @@ export default function AdvancesPage() {
     try {
       await db.requestCashAdvance({
         requested_by: currentUser.id,
-        project_name: requestForm.projectName,
+        project_id: requestForm.projectId,
         purpose: requestForm.purpose,
         amount_requested_ugx: amount,
         expected_retirement_date: requestForm.expectedRetirementDate
       });
       setSuccessMsg('Advance request submitted successfully.');
       setShowRequestModal(false);
-      setRequestForm({ projectName: '', purpose: '', amountRequested: '', expectedRetirementDate: '' });
+      setRequestForm({ projectId: projects[0]?.id || '', projectName: projects[0]?.name || '', purpose: '', amountRequested: '', expectedRetirementDate: '' });
       fetchAdvances(currentUser);
     } catch (e: any) {
       setErrorMsg(e.message || 'Failed to submit request.');
@@ -648,15 +670,28 @@ export default function AdvancesPage() {
             </div>
             <form onSubmit={handleRequestSubmit} className="p-5 space-y-4">
               <div>
-                <label className="block text-[10px] font-bold text-text uppercase tracking-wider mb-1">Project Name</label>
-                <input
-                  type="text"
+                <label className="block text-[10px] font-bold text-text uppercase tracking-wider mb-1">Project</label>
+                <select
                   required
-                  placeholder="e.g. Kampala Fiber Node Expansion"
-                  value={requestForm.projectName}
-                  onChange={e => setRequestForm(prev => ({ ...prev, projectName: e.target.value }))}
+                  value={requestForm.projectId}
+                  onChange={e => {
+                    const selectedId = e.target.value;
+                    const chosen = projects.find(p => p.id === selectedId);
+                    setRequestForm(prev => ({
+                      ...prev,
+                      projectId: selectedId,
+                      projectName: chosen ? chosen.name : ''
+                    }));
+                  }}
                   className="w-full h-10 px-3 border border-border rounded-md text-sm bg-background text-text focus:outline-none focus:border-primary transition"
-                />
+                >
+                  <option value="" disabled>Select active project...</option>
+                  {projects.map((proj) => (
+                    <option key={proj.id} value={proj.id}>
+                      {proj.name}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>
