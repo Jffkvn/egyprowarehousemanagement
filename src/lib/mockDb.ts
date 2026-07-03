@@ -335,6 +335,20 @@ export interface AdvanceEndorsement {
   created_at: string;
 }
 
+export interface DailyUpdate {
+  id: string;
+  company_id: string;
+  project_id: string;
+  submitted_by: string;
+  update_date: string;
+  summary: string;
+  photo_urls: string[];
+  created_at: string;
+  // UI helpers
+  submitted_by_name?: string;
+  project_name?: string;
+}
+
 // Initial Mock Seed Data
 const MOCK_COMPANY_ID = 'c1c1c1c1-1111-1111-1111-111111111111';
 const MOCK_USERS: User[] = [
@@ -568,6 +582,7 @@ function getDbState() {
     if (!parsed.projectAssignments) parsed.projectAssignments = [];
     if (!parsed.requestEndorsements) parsed.requestEndorsements = [];
     if (!parsed.advanceEndorsements) parsed.advanceEndorsements = [];
+    if (!parsed.dailyUpdates) parsed.dailyUpdates = [];
     return parsed;
   }
 
@@ -739,6 +754,7 @@ function getDbState() {
     retirementEntries: mockRetirementEntries,
     requestEndorsements: [] as RequestEndorsement[],
     advanceEndorsements: [] as AdvanceEndorsement[],
+    dailyUpdates: [] as DailyUpdate[],
     sequences: {
       'cat11111-1111-1111-1111-111111111111': 2,
       'cat22222-2222-2222-2222-222222222222': 2,
@@ -2596,5 +2612,90 @@ export const mockDb = {
     adv.md_consultation_note = note;
     saveDbState(state);
     return adv;
+  },
+
+  getDailyUpdates: async (projectId?: string): Promise<DailyUpdate[]> => {
+    const state = getDbState();
+    let updates = state.dailyUpdates || [];
+    if (projectId) {
+      updates = updates.filter((u: DailyUpdate) => u.project_id === projectId);
+    }
+    return updates.map((du: DailyUpdate) => {
+      const user = state.users.find((u: User) => u.id === du.submitted_by);
+      const proj = state.projects.find((p: Project) => p.id === du.project_id);
+      return {
+        ...du,
+        submitted_by_name: user ? user.full_name : 'Coordinator',
+        project_name: proj ? proj.name : 'Unknown Project'
+      };
+    });
+  },
+
+  createDailyUpdate: async (data: Omit<DailyUpdate, 'id' | 'company_id' | 'created_at'>): Promise<DailyUpdate> => {
+    const state = getDbState();
+    const id = 'du_' + Math.random().toString(36).substr(2, 9);
+    const newUpdate: DailyUpdate = {
+      ...data,
+      id,
+      company_id: MOCK_COMPANY_ID,
+      created_at: new Date().toISOString()
+    };
+    if (!state.dailyUpdates) state.dailyUpdates = [];
+    
+    state.dailyUpdates = state.dailyUpdates.filter(
+      (u: DailyUpdate) => !(u.project_id === data.project_id && u.submitted_by === data.submitted_by && u.update_date === data.update_date)
+    );
+    
+    state.dailyUpdates.push(newUpdate);
+    saveDbState(state);
+
+    const user = state.users.find((u: User) => u.id === data.submitted_by);
+    const proj = state.projects.find((p: Project) => p.id === data.project_id);
+    return {
+      ...newUpdate,
+      submitted_by_name: user ? user.full_name : 'Coordinator',
+      project_name: proj ? proj.name : 'Unknown Project'
+    };
+  },
+
+  checkMissedDailyUpdates: async (dateStr: string): Promise<Array<{ project_id: string; project_name: string; user_id: string; user_full_name: string }>> => {
+    const state = getDbState();
+    const activeProjects = (state.projects || []).filter((p: Project) => p.status === 'active');
+    const assignments = state.projectAssignments || [];
+    const dailyUpdates = state.dailyUpdates || [];
+    
+    const results: Array<{ project_id: string; project_name: string; user_id: string; user_full_name: string }> = [];
+    const checkDate = new Date(dateStr);
+    
+    for (const p of activeProjects) {
+      const assignedCoordinators = assignments.filter((pa: ProjectAssignment) => {
+        if (pa.project_id !== p.id || pa.role_on_project !== 'coordinator') return false;
+        const assignedDate = new Date(pa.assigned_at.split('T')[0]);
+        const unassignedDate = pa.unassigned_at ? new Date(pa.unassigned_at.split('T')[0]) : null;
+        
+        const isAfterOrOnAssigned = checkDate >= assignedDate;
+        const isBeforeOrOnUnassigned = !unassignedDate || checkDate <= unassignedDate;
+        
+        return isAfterOrOnAssigned && isBeforeOrOnUnassigned;
+      });
+      
+      for (const pa of assignedCoordinators) {
+        const hasUpdate = dailyUpdates.some(
+          (u: DailyUpdate) => u.project_id === p.id && u.submitted_by === pa.user_id && u.update_date === dateStr
+        );
+        
+        if (!hasUpdate) {
+          const user = state.users.find((u: User) => u.id === pa.user_id);
+          results.push({
+            project_id: p.id,
+            project_name: p.name,
+            user_id: pa.user_id,
+            user_full_name: user ? user.full_name : 'Unknown Coordinator'
+          });
+        }
+      }
+    }
+    
+    return results;
   }
 };

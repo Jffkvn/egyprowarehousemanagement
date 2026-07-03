@@ -2,9 +2,9 @@
 // Delegates queries to Supabase if configured, or falls back to Mock LocalStorage.
 
 import { supabase } from './supabaseClient';
-import { mockDb, User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport, CashAdvance, Disbursement, RetirementEntry, Project, ProjectAssignment, RequestEndorsement, AdvanceEndorsement } from './mockDb';
+import { mockDb, User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport, CashAdvance, Disbursement, RetirementEntry, Project, ProjectAssignment, RequestEndorsement, AdvanceEndorsement, DailyUpdate } from './mockDb';
 
-export type { User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport, CashAdvance, Disbursement, RetirementEntry, Project, ProjectAssignment, RequestEndorsement, AdvanceEndorsement };
+export type { User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport, CashAdvance, Disbursement, RetirementEntry, Project, ProjectAssignment, RequestEndorsement, AdvanceEndorsement, DailyUpdate };
 
 // Helper to determine if we should use Supabase or fallback to mock
 const useSupabase = () => {
@@ -1975,6 +1975,84 @@ export const db = {
       if (useSupabase()) throw e;
       console.warn('Supabase saveMdConsultationNote failed, using mock database:', e);
       return mockDb.saveMdConsultationNote(advanceId, note);
+    }
+  },
+
+  getDailyUpdates: async (projectId?: string): Promise<DailyUpdate[]> => {
+    if (!useSupabase()) {
+      return mockDb.getDailyUpdates(projectId);
+    }
+    try {
+      let query = supabase!
+        .from('daily_updates')
+        .select(`
+          *,
+          users:submitted_by (full_name),
+          projects:project_id (name)
+        `)
+        .order('update_date', { ascending: false });
+      
+      if (projectId) {
+        query = query.eq('project_id', projectId);
+      }
+      
+      const { data, error } = await query;
+      if (error) throw error;
+      return (data || []).map((du: any) => ({
+        ...du,
+        submitted_by_name: du.users ? du.users.full_name : 'Coordinator',
+        project_name: du.projects ? du.projects.name : 'Unknown Project'
+      })) as DailyUpdate[];
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase getDailyUpdates failed, using mock database:', e);
+      return mockDb.getDailyUpdates(projectId);
+    }
+  },
+
+  createDailyUpdate: async (data: Omit<DailyUpdate, 'id' | 'company_id' | 'created_at'>): Promise<DailyUpdate> => {
+    if (!useSupabase()) {
+      return mockDb.createDailyUpdate(data);
+    }
+    try {
+      const companyId = await getCompanyId();
+      const { data: inserted, error } = await supabase!
+        .from('daily_updates')
+        .insert([{
+          ...data,
+          company_id: companyId
+        }])
+        .select(`
+          *,
+          users:submitted_by (full_name),
+          projects:project_id (name)
+        `)
+        .single();
+      if (error) throw error;
+      return {
+        ...inserted,
+        submitted_by_name: inserted.users ? inserted.users.full_name : 'Coordinator',
+        project_name: inserted.projects ? inserted.projects.name : 'Unknown Project'
+      } as DailyUpdate;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase createDailyUpdate failed, using mock database:', e);
+      return mockDb.createDailyUpdate(data);
+    }
+  },
+
+  checkMissedDailyUpdates: async (dateStr: string): Promise<Array<{ project_id: string; project_name: string; user_id: string; user_full_name: string }>> => {
+    if (!useSupabase()) {
+      return mockDb.checkMissedDailyUpdates(dateStr);
+    }
+    try {
+      const { data, error } = await supabase!.rpc('rpc_check_missed_daily_updates', { p_date: dateStr });
+      if (error) throw error;
+      return data || [];
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase checkMissedDailyUpdates failed, using mock database:', e);
+      return mockDb.checkMissedDailyUpdates(dateStr);
     }
   }
 };
