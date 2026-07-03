@@ -2,9 +2,9 @@
 // Delegates queries to Supabase if configured, or falls back to Mock LocalStorage.
 
 import { supabase } from './supabaseClient';
-import { mockDb, User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport, CashAdvance, Disbursement, RetirementEntry } from './mockDb';
+import { mockDb, User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport, CashAdvance, Disbursement, RetirementEntry, Project, ProjectAssignment } from './mockDb';
 
-export type { User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport, CashAdvance, Disbursement, RetirementEntry };
+export type { User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport, CashAdvance, Disbursement, RetirementEntry, Project, ProjectAssignment };
 
 // Helper to determine if we should use Supabase or fallback to mock
 const useSupabase = () => {
@@ -1358,7 +1358,7 @@ export const db = {
     }
   },
 
-  getCashAdvances: async (role: 'pm' | 'warehouse_manager' | 'cfo', userId: string): Promise<CashAdvance[]> => {
+  getCashAdvances: async (role: User['role'], userId: string): Promise<CashAdvance[]> => {
     if (!useSupabase()) {
       return mockDb.getCashAdvances(role, userId);
     }
@@ -1575,6 +1575,150 @@ export const db = {
       if (useSupabase()) throw e;
       console.warn('Supabase checkOverdueAdvances failed, using mock database:', e);
       return mockDb.checkOverdueAdvances();
+    }
+  },
+
+  getProjects: async (): Promise<Project[]> => {
+    if (!useSupabase()) {
+      return mockDb.getProjects();
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('projects')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      return data as Project[];
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase getProjects failed, using mock database:', e);
+      return mockDb.getProjects();
+    }
+  },
+
+  createProject: async (project: Omit<Project, 'id' | 'company_id' | 'created_at'>): Promise<Project> => {
+    if (!useSupabase()) {
+      return mockDb.createProject(project);
+    }
+    try {
+      const companyId = await getCompanyId();
+      const { data, error } = await supabase!
+        .from('projects')
+        .insert([{
+          ...project,
+          company_id: companyId
+        }])
+        .select()
+        .single();
+      if (error) throw error;
+      return data as Project;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase createProject failed, using mock database:', e);
+      return mockDb.createProject(project);
+    }
+  },
+
+  updateProjectBudget: async (projectId: string, budget: number, notes: string, userId: string): Promise<Project> => {
+    if (!useSupabase()) {
+      return mockDb.updateProjectBudget(projectId, budget, notes, userId);
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('projects')
+        .update({
+          estimated_budget_ugx: budget,
+          budget_notes: notes,
+          budget_set_by: userId
+        })
+        .eq('id', projectId)
+        .select()
+        .single();
+      if (error) throw error;
+      return data as Project;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase updateProjectBudget failed, using mock database:', e);
+      return mockDb.updateProjectBudget(projectId, budget, notes, userId);
+    }
+  },
+
+  updateProjectStatus: async (projectId: string, status: 'active' | 'completed' | 'on_hold'): Promise<Project> => {
+    if (!useSupabase()) {
+      return mockDb.updateProjectStatus(projectId, status);
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('projects')
+        .update({ status })
+        .eq('id', projectId)
+        .select()
+        .single();
+      if (error) throw error;
+      return data as Project;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase updateProjectStatus failed, using mock database:', e);
+      return mockDb.updateProjectStatus(projectId, status);
+    }
+  },
+
+  getProjectAssignments: async (): Promise<ProjectAssignment[]> => {
+    if (!useSupabase()) {
+      return mockDb.getProjectAssignments();
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('project_assignments')
+        .select('*');
+      if (error) throw error;
+      return data as ProjectAssignment[];
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase getProjectAssignments failed, using mock database:', e);
+      return mockDb.getProjectAssignments();
+    }
+  },
+
+  assignUserToProject: async (projectId: string, userId: string, roleOnProject: 'coordinator' | 'pm'): Promise<ProjectAssignment> => {
+    if (!useSupabase()) {
+      return mockDb.assignUserToProject(projectId, userId, roleOnProject);
+    }
+    try {
+      const companyId = await getCompanyId();
+      const { data, error } = await supabase!
+        .from('project_assignments')
+        .insert([{
+          company_id: companyId,
+          project_id: projectId,
+          user_id: userId,
+          role_on_project: roleOnProject
+        }])
+        .select()
+        .single();
+      if (error) throw error;
+      return data as ProjectAssignment;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase assignUserToProject failed, using mock database:', e);
+      return mockDb.assignUserToProject(projectId, userId, roleOnProject);
+    }
+  },
+
+  unassignUserFromProject: async (assignmentId: string): Promise<void> => {
+    if (!useSupabase()) {
+      return mockDb.unassignUserFromProject(assignmentId);
+    }
+    try {
+      const { error } = await supabase!
+        .from('project_assignments')
+        .update({ unassigned_at: new Date().toISOString() })
+        .eq('id', assignmentId);
+      if (error) throw error;
+    } catch (e: any) {
+      if (useSupabase()) throw e;
+      console.warn('Supabase unassignUserFromProject failed, using mock database:', e);
+      return mockDb.unassignUserFromProject(assignmentId);
     }
   }
 };

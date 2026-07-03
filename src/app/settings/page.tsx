@@ -140,10 +140,12 @@ export default function SettingsPage() {
 
   const [actionLoading, setActionLoading] = useState(false);
 
-  const roleNames = {
+  const roleNames: Record<string, string> = {
     cfo: 'CFO (Financial Admin)',
     warehouse_manager: 'Warehouse Manager',
-    pm: 'Project Manager (Field PM)'
+    pm: 'Project Manager (Field PM)',
+    coordinator: 'Project Coordinator',
+    md: 'Managing Director (MD)'
   };
 
   if (loading) {

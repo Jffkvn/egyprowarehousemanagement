@@ -1463,3 +1463,88 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 
+-- =========================================================================
+-- PROJECTS & ASSIGNMENTS (Roles, Projects & Notifications Update)
+-- =========================================================================
+
+CREATE TYPE project_status AS ENUM ('active', 'completed', 'on_hold');
+
+CREATE TABLE projects (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id),
+  name TEXT NOT NULL,
+  site_location TEXT,
+  status project_status NOT NULL DEFAULT 'active',
+  estimated_budget_ugx NUMERIC,
+  budget_notes TEXT,
+  budget_set_by UUID REFERENCES users(id),
+  created_by UUID NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TYPE assignment_role AS ENUM ('coordinator', 'pm');
+
+CREATE TABLE project_assignments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id),
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id),
+  role_on_project assignment_role NOT NULL,
+  assigned_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  unassigned_at TIMESTAMPTZ
+);
+
+-- RLS Enforcement
+ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE project_assignments ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY projects_select ON projects
+  FOR SELECT USING (
+    company_id = get_current_user_company() AND (
+      get_current_user_role() IN ('cfo', 'md', 'warehouse_manager') OR
+      EXISTS (
+        SELECT 1 FROM project_assignments pa
+        WHERE pa.project_id = id
+          AND pa.user_id = auth.uid()
+      )
+    )
+  );
+
+CREATE POLICY projects_insert ON projects
+  FOR INSERT WITH CHECK (
+    company_id = get_current_user_company() AND get_current_user_role() = 'cfo'
+  );
+
+CREATE POLICY projects_update ON projects
+  FOR UPDATE USING (
+    company_id = get_current_user_company() AND (
+      get_current_user_role() IN ('cfo', 'md') OR (
+        get_current_user_role() = 'pm' AND EXISTS (
+          SELECT 1 FROM project_assignments pa
+          WHERE pa.project_id = id
+            AND pa.user_id = auth.uid()
+            AND pa.unassigned_at IS NULL
+        )
+      )
+    )
+  );
+
+CREATE POLICY project_assignments_select ON project_assignments
+  FOR SELECT USING (
+    company_id = get_current_user_company() AND (
+      get_current_user_role() IN ('cfo', 'md', 'warehouse_manager') OR user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY project_assignments_insert ON project_assignments
+  FOR INSERT WITH CHECK (
+    company_id = get_current_user_company() AND get_current_user_role() = 'cfo'
+  );
+
+CREATE POLICY project_assignments_update ON project_assignments
+  FOR UPDATE USING (
+    company_id = get_current_user_company() AND get_current_user_role() = 'cfo'
+  );
+
+
+

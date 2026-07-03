@@ -12,7 +12,7 @@ export interface User {
   company_id: string;
   full_name: string;
   email: string;
-  role: 'pm' | 'warehouse_manager' | 'cfo';
+  role: 'pm' | 'warehouse_manager' | 'cfo' | 'coordinator' | 'md';
   phone?: string;
   is_active: boolean;
   created_at: string;
@@ -285,6 +285,29 @@ export interface RetirementEntry {
   created_at: string;
 }
 
+export interface Project {
+  id: string;
+  company_id: string;
+  name: string;
+  site_location?: string;
+  status: 'active' | 'completed' | 'on_hold';
+  estimated_budget_ugx?: number;
+  budget_notes?: string;
+  budget_set_by?: string;
+  created_by: string;
+  created_at: string;
+}
+
+export interface ProjectAssignment {
+  id: string;
+  company_id: string;
+  project_id: string;
+  user_id: string;
+  role_on_project: 'coordinator' | 'pm';
+  assigned_at: string;
+  unassigned_at?: string;
+}
+
 // Initial Mock Seed Data
 const MOCK_COMPANY_ID = 'c1c1c1c1-1111-1111-1111-111111111111';
 const MOCK_USERS: User[] = [
@@ -494,6 +517,8 @@ function getDbState() {
     if (!parsed.notificationChannels) parsed.notificationChannels = [];
     if (!parsed.qrLabels) parsed.qrLabels = [];
     if (!parsed.reportExports) parsed.reportExports = [];
+    if (!parsed.projects) parsed.projects = [];
+    if (!parsed.projectAssignments) parsed.projectAssignments = [];
     return parsed;
   }
 
@@ -605,8 +630,46 @@ function getDbState() {
     }
   ];
 
+  const mockProjects: Project[] = [
+    {
+      id: 'proj-kampala',
+      company_id: MOCK_COMPANY_ID,
+      name: 'Kampala Fiber Node Expansion',
+      site_location: 'Kampala Central',
+      status: 'active',
+      estimated_budget_ugx: 50000000,
+      budget_notes: 'Initial fiber phase layout budget',
+      created_by: 'u1111111-1111-1111-1111-111111111111',
+      created_at: new Date().toISOString()
+    },
+    {
+      id: 'proj-entebbe',
+      company_id: MOCK_COMPANY_ID,
+      name: 'Entebbe Mast Site Upgrade',
+      site_location: 'Entebbe Area',
+      status: 'active',
+      estimated_budget_ugx: 35000000,
+      budget_notes: 'Standard site earthing and mast update allocation',
+      created_by: 'u1111111-1111-1111-1111-111111111111',
+      created_at: new Date().toISOString()
+    }
+  ];
+
+  const mockProjectAssignments: ProjectAssignment[] = [
+    {
+      id: 'pa-sarah-kampala',
+      company_id: MOCK_COMPANY_ID,
+      project_id: 'proj-kampala',
+      user_id: 'u3333333-3333-3333-3333-333333333333',
+      role_on_project: 'coordinator',
+      assigned_at: new Date().toISOString()
+    }
+  ];
+
   const state = {
     users: MOCK_USERS,
+    projects: mockProjects,
+    projectAssignments: mockProjectAssignments,
     categories: MOCK_CATEGORIES,
     equipment: seededEquipment,
     consumables: seededConsumables,
@@ -2009,7 +2072,7 @@ export const mockDb = {
     };
   },
 
-  getCashAdvances: async (role: 'pm' | 'warehouse_manager' | 'cfo', userId: string): Promise<CashAdvance[]> => {
+  getCashAdvances: async (role: User['role'], userId: string): Promise<CashAdvance[]> => {
     const state = getDbState();
     const advances = state.cashAdvances || [];
     
@@ -2229,6 +2292,77 @@ export const mockDb = {
       }
     });
 
+    saveDbState(state);
+  },
+
+  getProjects: async (): Promise<Project[]> => {
+    const state = getDbState();
+    return state.projects || [];
+  },
+
+  createProject: async (project: Omit<Project, 'id' | 'company_id' | 'created_at'>): Promise<Project> => {
+    const state = getDbState();
+    const id = 'proj_' + Math.random().toString(36).substr(2, 9);
+    const newProj: Project = {
+      ...project,
+      id,
+      company_id: MOCK_COMPANY_ID,
+      status: 'active',
+      created_at: new Date().toISOString()
+    };
+    if (!state.projects) state.projects = [];
+    state.projects.push(newProj);
+    saveDbState(state);
+    return newProj;
+  },
+
+  updateProjectBudget: async (projectId: string, budget: number, notes: string, userId: string): Promise<Project> => {
+    const state = getDbState();
+    const proj = (state.projects || []).find((p: Project) => p.id === projectId);
+    if (!proj) throw new Error('Project not found');
+    proj.estimated_budget_ugx = budget;
+    proj.budget_notes = notes;
+    proj.budget_set_by = userId;
+    saveDbState(state);
+    return proj;
+  },
+
+  updateProjectStatus: async (projectId: string, status: 'active' | 'completed' | 'on_hold'): Promise<Project> => {
+    const state = getDbState();
+    const proj = (state.projects || []).find((p: Project) => p.id === projectId);
+    if (!proj) throw new Error('Project not found');
+    proj.status = status;
+    saveDbState(state);
+    return proj;
+  },
+
+  getProjectAssignments: async (): Promise<ProjectAssignment[]> => {
+    const state = getDbState();
+    return state.projectAssignments || [];
+  },
+
+  assignUserToProject: async (projectId: string, userId: string, roleOnProject: 'coordinator' | 'pm'): Promise<ProjectAssignment> => {
+    const state = getDbState();
+    const id = 'pa_' + Math.random().toString(36).substr(2, 9);
+    const newAssignment: ProjectAssignment = {
+      id,
+      company_id: MOCK_COMPANY_ID,
+      project_id: projectId,
+      user_id: userId,
+      role_on_project: roleOnProject,
+      assigned_at: new Date().toISOString()
+    };
+    if (!state.projectAssignments) state.projectAssignments = [];
+    state.projectAssignments.push(newAssignment);
+    saveDbState(state);
+    return newAssignment;
+  },
+
+  unassignUserFromProject: async (assignmentId: string): Promise<void> => {
+    const state = getDbState();
+    const assignment = (state.projectAssignments || []).find((a: ProjectAssignment) => a.id === assignmentId);
+    if (!assignment) throw new Error('Assignment not found');
+    assignment.unassigned_at = new Date().toISOString();
     saveDbState(state);
   }
 };

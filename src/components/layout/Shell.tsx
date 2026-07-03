@@ -94,10 +94,12 @@ export default function Shell({ children }: ShellProps) {
 
   if (!user) return <>{children}</>;
 
-  const roleLabels = {
+  const roleLabels: Record<string, string> = {
     cfo: 'CFO',
     warehouse_manager: 'Warehouse Manager',
-    pm: 'Project Manager'
+    pm: 'Project Manager',
+    coordinator: 'Project Coordinator',
+    md: 'Managing Director'
   };
 
   const navItems = [
