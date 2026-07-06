@@ -349,6 +349,17 @@ export interface DailyUpdate {
   project_name?: string;
 }
 
+export interface NotificationLog {
+  id: string;
+  company_id: string;
+  recipient_email: string;
+  subject: string;
+  body_html: string;
+  status: 'sent' | 'failed';
+  channel: 'email' | 'whatsapp';
+  sent_at: string;
+}
+
 // Initial Mock Seed Data
 const MOCK_COMPANY_ID = 'c1c1c1c1-1111-1111-1111-111111111111';
 const MOCK_USERS: User[] = [
@@ -583,6 +594,81 @@ function getDbState() {
     if (!parsed.requestEndorsements) parsed.requestEndorsements = [];
     if (!parsed.advanceEndorsements) parsed.advanceEndorsements = [];
     if (!parsed.dailyUpdates) parsed.dailyUpdates = [];
+    if (!parsed.notificationLogs) parsed.notificationLogs = [];
+
+    // Ensure all seed users exist in the parsed users array
+    let needsSave = false;
+    if (!parsed.users) {
+      parsed.users = MOCK_USERS;
+      needsSave = true;
+    } else {
+      const usersUpdated = [...parsed.users];
+      MOCK_USERS.forEach(seedUser => {
+        const matchedIndex = usersUpdated.findIndex(
+          u => u.id === seedUser.id || u.email.toLowerCase() === seedUser.email.toLowerCase()
+        );
+        if (matchedIndex === -1) {
+          usersUpdated.push(seedUser);
+          needsSave = true;
+        } else {
+          // Sync role or status/name changes (like PM role to Coordinator role)
+          const matched = usersUpdated[matchedIndex];
+          if (matched.role !== seedUser.role || matched.email !== seedUser.email || matched.full_name !== seedUser.full_name) {
+            usersUpdated[matchedIndex] = { ...matched, role: seedUser.role, email: seedUser.email, full_name: seedUser.full_name };
+            needsSave = true;
+          }
+        }
+      });
+      parsed.users = usersUpdated;
+    }
+
+    // Ensure default projects exist
+    if (parsed.projects.length === 0) {
+      parsed.projects = [
+        {
+          id: 'proj-kampala',
+          company_id: MOCK_COMPANY_ID,
+          name: 'Kampala Fiber Node Expansion',
+          site_location: 'Kampala Central',
+          status: 'active',
+          estimated_budget_ugx: 50000000,
+          budget_notes: 'Initial fiber phase layout budget',
+          created_by: 'u1111111-1111-1111-1111-111111111111',
+          created_at: new Date().toISOString()
+        },
+        {
+          id: 'proj-entebbe',
+          company_id: MOCK_COMPANY_ID,
+          name: 'Entebbe Mast Site Upgrade',
+          site_location: 'Entebbe Area',
+          status: 'active',
+          estimated_budget_ugx: 35000000,
+          budget_notes: 'Standard site earthing and mast update allocation',
+          created_by: 'u1111111-1111-1111-1111-111111111111',
+          created_at: new Date().toISOString()
+        }
+      ];
+      needsSave = true;
+    }
+
+    // Ensure default project assignments exist
+    if (parsed.projectAssignments.length === 0) {
+      parsed.projectAssignments = [
+        {
+          id: 'pa-sarah-kampala',
+          company_id: MOCK_COMPANY_ID,
+          project_id: 'proj-kampala',
+          user_id: 'u3333333-3333-3333-3333-333333333333',
+          role_on_project: 'coordinator',
+          assigned_at: new Date().toISOString()
+        }
+      ];
+      needsSave = true;
+    }
+
+    if (needsSave) {
+      localStorage.setItem('equip_track_mock_db', JSON.stringify(parsed));
+    }
     return parsed;
   }
 
@@ -755,6 +841,7 @@ function getDbState() {
     requestEndorsements: [] as RequestEndorsement[],
     advanceEndorsements: [] as AdvanceEndorsement[],
     dailyUpdates: [] as DailyUpdate[],
+    notificationLogs: [] as NotificationLog[],
     sequences: {
       'cat11111-1111-1111-1111-111111111111': 2,
       'cat22222-2222-2222-2222-222222222222': 2,
@@ -773,6 +860,27 @@ function saveDbState(state: any) {
 
 // MOCK SERVICE API METHODS
 export const mockDb = {
+  logNotification: (companyId: string, email: string, subject: string, bodyHtml: string) => {
+    const state = getDbState();
+    if (!state.notificationLogs) state.notificationLogs = [];
+    state.notificationLogs.push({
+      id: 'log_' + Math.random().toString(36).substr(2, 9),
+      company_id: companyId,
+      recipient_email: email,
+      subject,
+      body_html: bodyHtml,
+      status: 'sent',
+      channel: 'email',
+      sent_at: new Date().toISOString()
+    });
+    saveDbState(state);
+  },
+
+  getNotificationLogs: async (): Promise<NotificationLog[]> => {
+    const state = getDbState();
+    return state.notificationLogs || [];
+  },
+
   login: async (email: string): Promise<User | null> => {
     const state = getDbState();
     const user = state.users.find((u: User) => u.email.toLowerCase() === email.toLowerCase() && u.is_active);
@@ -1167,6 +1275,16 @@ export const mockDb = {
     });
 
     saveDbState(state);
+    
+    // Log transactional email notification
+    const pmUser = state.users.find((u: User) => u.id === req.requested_by);
+    mockDb.logNotification(
+      req.company_id || MOCK_COMPANY_ID,
+      pmUser ? pmUser.email : 'pm@egypro.com',
+      'Logistics Request Update - approved',
+      `<p>Your logistics requisition for project <strong>${req.project_name}</strong> has changed status to <strong>approved</strong>.</p>`
+    );
+
     return req;
   },
 
@@ -1194,6 +1312,16 @@ export const mockDb = {
     });
 
     saveDbState(state);
+
+    // Log transactional email notification
+    const pmUser = state.users.find((u: User) => u.id === req.requested_by);
+    mockDb.logNotification(
+      req.company_id || MOCK_COMPANY_ID,
+      pmUser ? pmUser.email : 'pm@egypro.com',
+      'Logistics Request Update - rejected',
+      `<p>Your logistics requisition for project <strong>${req.project_name}</strong> has changed status to <strong>rejected</strong>.</p><p><strong>Reason:</strong> ${reason}</p>`
+    );
+
     return req;
   },
 
@@ -2247,6 +2375,15 @@ export const mockDb = {
     adv.approved_at = new Date().toISOString();
     saveDbState(state);
 
+    // Log email notification for approval
+    const pmUser = state.users.find((u: User) => u.id === adv.requested_by);
+    mockDb.logNotification(
+      adv.company_id || MOCK_COMPANY_ID,
+      pmUser ? pmUser.email : 'pm@company.com',
+      'Cash Advance Request Update - approved',
+      `<p>Your cash advance request for project <strong>${adv.project_name}</strong> of amount ${adv.amount_requested_ugx} UGX has changed status to <strong>approved</strong>.</p>`
+    );
+
     return adv;
   },
 
@@ -2261,6 +2398,15 @@ export const mockDb = {
     adv.approved_at = new Date().toISOString();
     adv.rejection_reason = reason;
     saveDbState(state);
+
+    // Log email notification for rejection
+    const pmUser = state.users.find((u: User) => u.id === adv.requested_by);
+    mockDb.logNotification(
+      adv.company_id || MOCK_COMPANY_ID,
+      pmUser ? pmUser.email : 'pm@company.com',
+      'Cash Advance Request Update - rejected',
+      `<p>Your cash advance request for project <strong>${adv.project_name}</strong> of amount ${adv.amount_requested_ugx} UGX has changed status to <strong>rejected</strong>.</p><p><strong>Reason:</strong> ${reason}</p>`
+    );
 
     return adv;
   },
@@ -2500,6 +2646,16 @@ export const mockDb = {
     req.status = 'changes_requested';
     req.reviewer_note = reviewerNote;
     saveDbState(state);
+
+    // Log email notification
+    const pmUser = state.users.find((u: User) => u.id === req.requested_by);
+    mockDb.logNotification(
+      req.company_id || MOCK_COMPANY_ID,
+      pmUser ? pmUser.email : 'pm@company.com',
+      'Logistics Request Update - changes_requested',
+      `<p>Your logistics requisition for project <strong>${req.project_name}</strong> has changed status to <strong>changes_requested</strong>.</p><p><strong>Reviewer Note:</strong> ${reviewerNote}</p>`
+    );
+
     return req;
   },
 
@@ -2510,6 +2666,16 @@ export const mockDb = {
     adv.status = 'changes_requested';
     adv.reviewer_note = reviewerNote;
     saveDbState(state);
+
+    // Log email notification
+    const pmUser = state.users.find((u: User) => u.id === adv.requested_by);
+    mockDb.logNotification(
+      adv.company_id || MOCK_COMPANY_ID,
+      pmUser ? pmUser.email : 'pm@company.com',
+      'Cash Advance Request Update - changes_requested',
+      `<p>Your cash advance request for project <strong>${adv.project_name}</strong> of amount ${adv.amount_requested_ugx} UGX has changed status to <strong>changes_requested</strong>.</p><p><strong>Reviewer Note:</strong> ${reviewerNote}</p>`
+    );
+
     return adv;
   },
 
@@ -2576,6 +2742,16 @@ export const mockDb = {
     state.requests.push(newRequest);
     state.requestItems.push(...requestItemsToSave);
     saveDbState(state);
+
+    // Log email notification for resubmission
+    const pmUser = state.users.find((u: User) => u.id === newRequest.requested_by);
+    mockDb.logNotification(
+      newRequest.company_id || MOCK_COMPANY_ID,
+      pmUser ? pmUser.email : 'pm@company.com',
+      'Logistics Request Update - pending (resubmitted)',
+      `<p>Your logistics requisition revision <strong>${newRequest.revision_number}</strong> for project <strong>${newRequest.project_name}</strong> has been submitted and is pending review.</p>`
+    );
+
     return newRequest;
   },
 
@@ -2602,6 +2778,16 @@ export const mockDb = {
 
     state.cashAdvances.push(newAdv);
     saveDbState(state);
+
+    // Log email notification for resubmission
+    const pmUser = state.users.find((u: User) => u.id === newAdv.requested_by);
+    mockDb.logNotification(
+      newAdv.company_id || MOCK_COMPANY_ID,
+      pmUser ? pmUser.email : 'pm@company.com',
+      'Cash Advance Request Update - pending (resubmitted)',
+      `<p>Your cash advance request revision <strong>${newAdv.revision_number}</strong> for project <strong>${newAdv.project_name}</strong> of amount ${amount} UGX has been submitted and is pending review.</p>`
+    );
+
     return newAdv;
   },
 

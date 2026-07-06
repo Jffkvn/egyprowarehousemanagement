@@ -1677,7 +1677,113 @@ BEGIN
         AND du.update_date = p_date
     );
 END;
+
+-- =========================================================================
+-- TRANSACTIONAL EMAIL & NOTIFICATION LOGS (Roles, Projects & Notifications Update)
+-- =========================================================================
+
+CREATE TYPE notification_log_channel AS ENUM ('email', 'whatsapp');
+CREATE TYPE notification_log_status AS ENUM ('sent', 'failed');
+
+CREATE TABLE notification_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id),
+  recipient_email TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  body_html TEXT NOT NULL,
+  status notification_log_status NOT NULL DEFAULT 'sent',
+  channel notification_log_channel NOT NULL DEFAULT 'email',
+  sent_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE notification_logs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY notification_logs_select ON notification_logs
+  FOR SELECT USING (
+    company_id = get_current_user_company()
+  );
+
+CREATE OR REPLACE FUNCTION trigger_log_request_notification()
+RETURNS TRIGGER AS $$
+DECLARE
+  v_recipient_email TEXT;
+  v_subject TEXT;
+  v_body TEXT;
+BEGIN
+  IF OLD.status IS DISTINCT FROM NEW.status THEN
+    SELECT email INTO v_recipient_email FROM users WHERE id = NEW.requested_by;
+    
+    v_subject := 'Logistics Request Update - ' || NEW.status;
+    v_body := '<p>Your logistics requisition for project <strong>' || NEW.project_name || '</strong> has changed status to <strong>' || NEW.status || '</strong>.</p>';
+    IF NEW.status = 'changes_requested' AND NEW.reviewer_note IS NOT NULL THEN
+      v_body := v_body || '<p><strong>Reviewer Comments:</strong> ' || NEW.reviewer_note || '</p>';
+    END IF;
+    
+    INSERT INTO notification_logs (
+      company_id,
+      recipient_email,
+      subject,
+      body_html,
+      status,
+      channel
+    ) VALUES (
+      NEW.company_id,
+      COALESCE(v_recipient_email, 'pm@company.com'),
+      v_subject,
+      v_body,
+      'sent',
+      'email'
+    );
+  END IF;
+  RETURN NEW;
+END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER trg_log_request_notification
+AFTER UPDATE ON requests
+FOR EACH ROW EXECUTE FUNCTION trigger_log_request_notification();
+
+
+CREATE OR REPLACE FUNCTION trigger_log_advance_notification()
+RETURNS TRIGGER AS $$
+DECLARE
+  v_recipient_email TEXT;
+  v_subject TEXT;
+  v_body TEXT;
+BEGIN
+  IF OLD.status IS DISTINCT FROM NEW.status THEN
+    SELECT email INTO v_recipient_email FROM users WHERE id = NEW.requested_by;
+    
+    v_subject := 'Cash Advance Request Update - ' || NEW.status;
+    v_body := '<p>Your cash advance request for project <strong>' || NEW.project_name || '</strong> of amount ' || NEW.amount_requested_ugx::text || ' UGX has transitioned to status <strong>' || NEW.status || '</strong>.</p>';
+    IF NEW.status = 'changes_requested' AND NEW.reviewer_note IS NOT NULL THEN
+      v_body := v_body || '<p><strong>Reviewer Comments:</strong> ' || NEW.reviewer_note || '</p>';
+    END IF;
+    
+    INSERT INTO notification_logs (
+      company_id,
+      recipient_email,
+      subject,
+      body_html,
+      status,
+      channel
+    ) VALUES (
+      NEW.company_id,
+      COALESCE(v_recipient_email, 'pm@company.com'),
+      v_subject,
+      v_body,
+      'sent',
+      'email'
+    );
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER trg_log_advance_notification
+AFTER UPDATE ON cash_advances
+FOR EACH ROW EXECUTE FUNCTION trigger_log_advance_notification();
+
 
 
 

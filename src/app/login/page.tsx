@@ -82,24 +82,41 @@ export default function LoginPage() {
 
         <div className="mt-8 border-t border-border pt-6">
           <h3 className="text-xs font-semibold text-navy mb-3">Quick Login (Demo Accounts):</h3>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-5 gap-1.5">
+            <button
+              onClick={() => setDemoCredentials('coordinator@egypro.com')}
+              className="px-1 py-1.5 bg-success/10 hover:bg-success/20 text-success border border-success/25 rounded text-[10px] font-bold transition-colors text-center truncate"
+              title="Project Coordinator"
+            >
+              Coordinator
+            </button>
             <button
               onClick={() => setDemoCredentials('pm@egypro.com')}
-              className="px-2 py-1.5 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/25 rounded text-[11px] font-semibold transition-colors"
+              className="px-1 py-1.5 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/25 rounded text-[10px] font-bold transition-colors text-center truncate"
+              title="Project Manager"
             >
               PM
             </button>
             <button
               onClick={() => setDemoCredentials('wm@egypro.com')}
-              className="px-2 py-1.5 bg-navy/10 hover:bg-navy/20 text-navy border border-navy/25 rounded text-[11px] font-semibold transition-colors"
+              className="px-1 py-1.5 bg-navy/10 hover:bg-navy/20 text-navy border border-navy/25 rounded text-[10px] font-bold transition-colors text-center truncate"
+              title="Warehouse Manager"
             >
               Warehouse
             </button>
             <button
               onClick={() => setDemoCredentials('cfo@egypro.com')}
-              className="px-2 py-1.5 bg-danger/10 hover:bg-danger/20 text-danger border border-danger/25 rounded text-[11px] font-semibold transition-colors"
+              className="px-1 py-1.5 bg-danger/10 hover:bg-danger/20 text-danger border border-danger/25 rounded text-[10px] font-bold transition-colors text-center truncate"
+              title="CFO"
             >
               CFO
+            </button>
+            <button
+              onClick={() => setDemoCredentials('md@egypro.com')}
+              className="px-1 py-1.5 bg-neutral-tint hover:bg-neutral text-text border border-border rounded text-[10px] font-bold transition-colors text-center"
+              title="Managing Director"
+            >
+              MD
             </button>
           </div>
         </div>

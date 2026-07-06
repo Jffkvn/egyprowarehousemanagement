@@ -39,6 +39,12 @@ export default function RequestDetailPage({ params }: PageProps) {
   const [rejecting, setRejecting] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   
+  // Changes requested states
+  const [changesNote, setChangesNote] = useState('');
+  const [requestingChanges, setRequestingChanges] = useState(false);
+  const [endorsement, setEndorsement] = useState<any | null>(null);
+  const [parentRequest, setParentRequest] = useState<Request | null>(null);
+
   // Return logging states
   const [activeReturnItemId, setActiveReturnItemId] = useState<string | null>(null);
   const [returnCondition, setReturnCondition] = useState<'good' | 'damaged' | 'missing_parts' | 'non_functional'>('good');
@@ -56,6 +62,16 @@ export default function RequestDetailPage({ params }: PageProps) {
         return;
       }
       setRequest(req);
+
+      // Load PM endorsement if any
+      const end = await db.getRequestEndorsement(req.id);
+      setEndorsement(end);
+
+      // Load parent request if revision
+      if (req.parent_id) {
+        const parent = allRequests.find(r => r.id === req.parent_id);
+        if (parent) setParentRequest(parent);
+      }
 
       // Verify live stock availability for pending requests
       if (req.status === 'pending') {
@@ -121,6 +137,26 @@ export default function RequestDetailPage({ params }: PageProps) {
       await fetchRequestDetails();
     } catch (err: any) {
       alert(err?.message || 'Failed to reject request');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleRequestChanges = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !request) return;
+    if (!changesNote.trim()) {
+      alert('Changes request note is required.');
+      return;
+    }
+    setActionLoading(true);
+    try {
+      await db.requestChangesOnRequest(request.id, changesNote);
+      setRequestingChanges(false);
+      setChangesNote('');
+      await fetchRequestDetails();
+    } catch (err: any) {
+      alert(err?.message || 'Failed to request changes');
     } finally {
       setActionLoading(false);
     }
@@ -305,11 +341,70 @@ export default function RequestDetailPage({ params }: PageProps) {
               </div>
             </div>
 
+            {/* PM Endorsement */}
+            {endorsement && (
+              <div className="p-4 border rounded-lg bg-primary/5 border-primary/25 space-y-2">
+                <h4 className="text-xs font-bold text-navy uppercase tracking-wider flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4 text-primary" />
+                  Project Manager Endorsement
+                </h4>
+                <p className="text-xs text-text italic">"{endorsement.note || 'Endorsed without comment.'}"</p>
+                <div className="text-[10px] text-text-muted">
+                  Endorsed on {new Date(endorsement.created_at).toLocaleDateString()}
+                </div>
+              </div>
+            )}
+
+            {/* Revision History Comparison Panel */}
+            {parentRequest && (
+              <div className="border border-border rounded-lg overflow-hidden bg-background/30 space-y-0">
+                <div className="p-3 bg-background/50 border-b border-border flex justify-between items-center">
+                  <h4 className="text-xs font-bold text-navy uppercase tracking-wider">
+                    Revision History (Revision {request.revision_number || 1})
+                  </h4>
+                  <span className="px-2 py-0.5 bg-neutral-tint text-text rounded text-[9px] font-semibold border border-border">
+                    Active Revision
+                  </span>
+                </div>
+                <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                  <div>
+                    <h5 className="font-semibold text-text-muted mb-2 uppercase text-[10px]">Previous Version (Revision {(request.revision_number || 2) - 1})</h5>
+                    <div className="space-y-1 bg-surface p-2.5 rounded border border-border">
+                      <div><span className="font-medium text-text-muted">Needed From:</span> {parentRequest.needed_from}</div>
+                      <div><span className="font-medium text-text-muted">Needed Until:</span> {parentRequest.needed_until || 'Consumables Only'}</div>
+                      <div><span className="font-medium text-text-muted">Status:</span> <span className="capitalize">{parentRequest.status}</span></div>
+                      {parentRequest.reviewer_note && (
+                        <div className="mt-2 text-danger bg-danger-tint p-1.5 rounded border border-danger/10 text-[10px]">
+                          <span className="font-bold">Reviewer Note:</span> {parentRequest.reviewer_note}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <h5 className="font-semibold text-text-muted mb-2 uppercase text-[10px]">Current Version (Revision {request.revision_number})</h5>
+                    <div className="space-y-1 bg-surface p-2.5 rounded border border-border">
+                      <div><span className="font-medium text-text-muted">Needed From:</span> {request.needed_from}</div>
+                      <div><span className="font-medium text-text-muted">Needed Until:</span> {request.needed_until || 'Consumables Only'}</div>
+                      <div><span className="font-medium text-text-muted">Status:</span> <span className="capitalize">{request.status}</span></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Rejection reason banner */}
             {request.status === 'rejected' && request.rejection_reason && (
               <div className="p-4 bg-danger-tint border border-danger/25 text-danger rounded-md text-sm">
                 <div className="font-bold text-xs uppercase tracking-wider mb-1">Rejection Reason:</div>
                 <p className="font-medium">{request.rejection_reason}</p>
+              </div>
+            )}
+
+            {/* Changes requested banner */}
+            {request.status === 'changes_requested' && request.reviewer_note && (
+              <div className="p-4 bg-warning-tint border border-warning/25 text-warning rounded-md text-sm">
+                <div className="font-bold text-xs uppercase tracking-wider mb-1 text-navy">Changes Requested:</div>
+                <p className="font-medium text-text">{request.reviewer_note}</p>
               </div>
             )}
           </div>
@@ -334,7 +429,7 @@ export default function RequestDetailPage({ params }: PageProps) {
                       </div>
                     )}
 
-                    {!rejecting ? (
+                    {!rejecting && !requestingChanges ? (
                       <div className="grid grid-cols-1 gap-2">
                         <button
                           onClick={handleApprove}
@@ -344,16 +439,25 @@ export default function RequestDetailPage({ params }: PageProps) {
                           <ThumbsUp size={14} />
                           <span>Approve Request</span>
                         </button>
-                        <button
-                          onClick={() => setRejecting(true)}
-                          disabled={actionLoading}
-                          className="w-full h-10 border border-danger text-danger hover:bg-danger/5 font-semibold text-xs rounded-md transition-colors flex items-center justify-center space-x-1.5 disabled:opacity-50"
-                        >
-                          <ThumbsDown size={14} />
-                          <span>Reject Request</span>
-                        </button>
+                        
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            onClick={() => setRequestingChanges(true)}
+                            disabled={actionLoading}
+                            className="w-full h-9 border border-warning text-warning hover:bg-warning/5 font-semibold text-xs rounded-md transition-colors flex items-center justify-center space-x-1 disabled:opacity-50"
+                          >
+                            <span>Request Changes</span>
+                          </button>
+                          <button
+                            onClick={() => setRejecting(true)}
+                            disabled={actionLoading}
+                            className="w-full h-9 border border-danger text-danger hover:bg-danger/5 font-semibold text-xs rounded-md transition-colors flex items-center justify-center space-x-1 disabled:opacity-50"
+                          >
+                            <span>Reject</span>
+                          </button>
+                        </div>
                       </div>
-                    ) : (
+                    ) : rejecting ? (
                       <form onSubmit={handleReject} className="space-y-3">
                         <div>
                           <label className="block text-[11px] font-semibold text-text mb-1">
@@ -381,6 +485,41 @@ export default function RequestDetailPage({ params }: PageProps) {
                             onClick={() => {
                               setRejecting(false);
                               setRejectionReason('');
+                            }}
+                            className="px-3 h-8 border border-border text-text hover:bg-background text-xs font-semibold rounded transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </form>
+                    ) : (
+                      <form onSubmit={handleRequestChanges} className="space-y-3">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-text mb-1">
+                            Requested Changes Description <span className="text-danger">*</span>
+                          </label>
+                          <textarea
+                            required
+                            rows={3}
+                            value={changesNote}
+                            onChange={(e) => setChangesNote(e.target.value)}
+                            placeholder="Detail what needs to be changed..."
+                            className="w-full p-2 border border-border bg-surface rounded text-xs focus:outline-none focus:border-primary resize-none"
+                          />
+                        </div>
+                        <div className="flex space-x-2">
+                          <button
+                            type="submit"
+                            disabled={actionLoading}
+                            className="flex-1 h-8 bg-warning text-navy font-bold hover:bg-warning/95 text-xs rounded transition-colors"
+                          >
+                            Submit Request
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRequestingChanges(false);
+                              setChangesNote('');
                             }}
                             className="px-3 h-8 border border-border text-text hover:bg-background text-xs font-semibold rounded transition-colors"
                           >

@@ -2,9 +2,9 @@
 // Delegates queries to Supabase if configured, or falls back to Mock LocalStorage.
 
 import { supabase } from './supabaseClient';
-import { mockDb, User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport, CashAdvance, Disbursement, RetirementEntry, Project, ProjectAssignment, RequestEndorsement, AdvanceEndorsement, DailyUpdate } from './mockDb';
+import { mockDb, User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport, CashAdvance, Disbursement, RetirementEntry, Project, ProjectAssignment, RequestEndorsement, AdvanceEndorsement, DailyUpdate, NotificationLog } from './mockDb';
 
-export type { User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport, CashAdvance, Disbursement, RetirementEntry, Project, ProjectAssignment, RequestEndorsement, AdvanceEndorsement, DailyUpdate };
+export type { User, Category, Equipment, ConsumableStock, Request, Transaction, ProcurementRequest, Settings, RequestItem, Notification, DamageReport, GrnDocument, GrnItem, NotificationChannel, QrLabel, ReportExport, CashAdvance, Disbursement, RetirementEntry, Project, ProjectAssignment, RequestEndorsement, AdvanceEndorsement, DailyUpdate, NotificationLog };
 
 // Helper to determine if we should use Supabase or fallback to mock
 const useSupabase = () => {
@@ -886,6 +886,23 @@ export const db = {
     } catch (e) {
       console.warn('Supabase getNotifications failed, using mock database:', e);
       return mockDb.getNotifications(userId);
+    }
+  },
+
+  getNotificationLogs: async (): Promise<NotificationLog[]> => {
+    if (!useSupabase()) {
+      return mockDb.getNotificationLogs();
+    }
+    try {
+      const { data, error } = await supabase!
+        .from('notification_logs')
+        .select('*')
+        .order('sent_at', { ascending: false });
+      if (error) throw error;
+      return data as NotificationLog[];
+    } catch (e) {
+      console.warn('Supabase getNotificationLogs failed, using mock database:', e);
+      return mockDb.getNotificationLogs();
     }
   },
 

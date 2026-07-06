@@ -47,6 +47,31 @@ export default function AdvancesPage() {
   // Rejection State
   const [rejectionReason, setRejectionReason] = useState('');
 
+  // Revisions & Endorsements
+  const [advanceEndorsement, setAdvanceEndorsement] = useState<any | null>(null);
+  const [parentAdvance, setParentAdvance] = useState<any | null>(null);
+  const [mdNoteVal, setMdNoteVal] = useState('');
+  const [savingMdNote, setSavingMdNote] = useState(false);
+  const [requestingChanges, setRequestingChanges] = useState(false);
+  const [changesNote, setChangesNote] = useState('');
+
+  const [resubmitting, setResubmitting] = useState(false);
+  const [resubmitForm, setResubmitForm] = useState({
+    purpose: '',
+    amount: '',
+    expectedRetirementDate: ''
+  });
+
+  useEffect(() => {
+    if (selectedAdvance && selectedAdvance.status === 'changes_requested') {
+      setResubmitForm({
+        purpose: selectedAdvance.purpose,
+        amount: selectedAdvance.amount_requested_ugx.toString(),
+        expectedRetirementDate: selectedAdvance.expected_retirement_date
+      });
+    }
+  }, [selectedAdvance]);
+
   // Retirement Form State
   const [retirementForm, setRetirementForm] = useState({
     category: 'fuel' as 'fuel' | 'allowances' | 'materials' | 'accommodation' | 'other',
@@ -108,6 +133,116 @@ export default function AdvancesPage() {
       setRetirementEntries(data);
     } catch (e) {
       console.warn(e);
+    }
+  };
+
+  const handleOpenApprove = async (adv: CashAdvance) => {
+    setSelectedAdvance(adv);
+    setMdNoteVal(adv.md_consultation_note || '');
+    setRequestingChanges(false);
+    setChangesNote('');
+    setRejectionReason('');
+    
+    try {
+      const end = await db.getAdvanceEndorsement(adv.id);
+      setAdvanceEndorsement(end);
+      
+      if (adv.parent_id) {
+        const parent = advances.find(a => a.id === adv.parent_id);
+        setParentAdvance(parent || null);
+      } else {
+        setParentAdvance(null);
+      }
+    } catch (e) {
+      console.warn(e);
+    }
+    setShowApproveModal(true);
+  };
+
+  const handleOpenDetail = async (adv: CashAdvance) => {
+    setSelectedAdvance(adv);
+    setMdNoteVal(adv.md_consultation_note || '');
+    handleFetchRetirement(adv.id);
+    
+    try {
+      const end = await db.getAdvanceEndorsement(adv.id);
+      setAdvanceEndorsement(end);
+      
+      if (adv.parent_id) {
+        const parent = advances.find(a => a.id === adv.parent_id);
+        setParentAdvance(parent || null);
+      } else {
+        setParentAdvance(null);
+      }
+    } catch (e) {
+      console.warn(e);
+    }
+    setShowDetailModal(true);
+  };
+
+  const handleSaveMdNote = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedAdvance) return;
+    try {
+      setSavingMdNote(true);
+      const updated = await db.saveMdConsultationNote(selectedAdvance.id, mdNoteVal);
+      setSelectedAdvance(updated);
+      if (currentUser) fetchAdvances(currentUser);
+      alert('Consultation note saved successfully!');
+    } catch (err) {
+      console.error(err);
+      alert('Failed to save consultation note.');
+    } finally {
+      setSavingMdNote(false);
+    }
+  };
+
+  const handleRequestChangesSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedAdvance) return;
+    if (!changesNote.trim()) {
+      alert('Changes request note is required.');
+      return;
+    }
+    try {
+      setIsLoading(true);
+      await db.requestChangesOnAdvance(selectedAdvance.id, changesNote);
+      setRequestingChanges(false);
+      setChangesNote('');
+      setShowApproveModal(false);
+      if (currentUser) fetchAdvances(currentUser);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to request changes.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleResubmitSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedAdvance || !currentUser) return;
+    const parsedAmount = Number(resubmitForm.amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      alert('Please enter a valid positive amount.');
+      return;
+    }
+    try {
+      setResubmitting(true);
+      await db.resubmitAdvance(
+        selectedAdvance.id,
+        resubmitForm.purpose,
+        parsedAmount,
+        resubmitForm.expectedRetirementDate
+      );
+      alert('Revision resubmitted successfully!');
+      setShowDetailModal(false);
+      fetchAdvances(currentUser);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to resubmit revision.');
+    } finally {
+      setResubmitting(false);
     }
   };
 
@@ -557,7 +692,7 @@ export default function AdvancesPage() {
                             {/* CFO Decision options */}
                             {currentUser.role === 'cfo' && adv.status === 'pending' && (
                               <button
-                                onClick={() => { setSelectedAdvance(adv); setShowApproveModal(true); }}
+                                onClick={() => handleOpenApprove(adv)}
                                 className="px-2.5 py-1 bg-primary hover:bg-primary/95 text-white rounded text-[10px] font-bold transition"
                               >
                                 Review Request
@@ -580,11 +715,7 @@ export default function AdvancesPage() {
 
                             {/* Details Viewer */}
                             <button
-                              onClick={() => {
-                                setSelectedAdvance(adv);
-                                handleFetchRetirement(adv.id);
-                                setShowDetailModal(true);
-                              }}
+                              onClick={() => handleOpenDetail(adv)}
                               className="p-1 hover:bg-background border border-border text-navy rounded transition"
                               title="View Details & Accountabilities"
                             >
@@ -755,16 +886,16 @@ export default function AdvancesPage() {
       {/* MODAL 2: CFO Review & Decision Wizard */}
       {showApproveModal && selectedAdvance && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy/40 backdrop-blur-xs p-4">
-          <div className="w-full max-w-md bg-surface border border-border rounded-lg overflow-hidden shadow-lg">
+          <div className="w-full max-w-lg bg-surface border border-border rounded-lg overflow-hidden shadow-lg">
             <div className="p-4 border-b border-border flex items-center justify-between">
               <h3 className="text-sm font-bold text-navy">Review Cash Advance Request</h3>
               <button onClick={() => setShowApproveModal(false)} className="text-text-muted hover:text-text text-lg">&times;</button>
             </div>
-            <div className="p-5 space-y-4">
+            <div className="p-5 space-y-4 max-h-[80vh] overflow-y-auto">
               <div className="p-3 bg-background rounded-md border border-border space-y-2">
                 <p className="text-[10px] text-text-muted uppercase tracking-wider">Request Metadata</p>
                 <div className="grid grid-cols-2 gap-y-1.5 text-xs pt-1.5">
-                  <span className="text-text-muted">PM Requester:</span>
+                  <span className="text-text-muted">Requester:</span>
                   <span className="font-semibold text-text text-right">{selectedAdvance.requested_by_name}</span>
                   
                   <span className="text-text-muted">Project:</span>
@@ -782,6 +913,40 @@ export default function AdvancesPage() {
                 </div>
               </div>
 
+              {/* PM Endorsement */}
+              {advanceEndorsement && (
+                <div className="p-3 border rounded-md bg-primary/5 border-primary/20 space-y-1 text-xs">
+                  <h4 className="text-[10px] font-bold text-navy uppercase tracking-wider">Project Manager Endorsement</h4>
+                  <p className="italic text-text">"{advanceEndorsement.note || 'Endorsed without comment.'}"</p>
+                </div>
+              )}
+
+              {/* Revision Comparison */}
+              {parentAdvance && (
+                <div className="border border-border rounded-md overflow-hidden text-xs bg-background/50">
+                  <div className="p-2 bg-background border-b border-border font-bold text-navy uppercase text-[9px]">
+                    Revision History (Revision {selectedAdvance.revision_number || 1})
+                  </div>
+                  <div className="p-3 grid grid-cols-2 gap-3">
+                    <div className="space-y-1 bg-surface p-2 rounded border border-border">
+                      <div className="font-bold text-text-muted uppercase text-[9px] mb-1">Previous Version</div>
+                      <div><span className="font-semibold">Amount:</span> {formatCurrency(parentAdvance.amount_requested_ugx)}</div>
+                      <div><span className="font-semibold">Deadline:</span> {parentAdvance.expected_retirement_date}</div>
+                      {parentAdvance.reviewer_note && (
+                        <div className="mt-1 text-danger text-[9px] bg-danger-tint p-1 rounded border border-danger/10">
+                          <strong>Note:</strong> {parentAdvance.reviewer_note}
+                        </div>
+                      )}
+                    </div>
+                    <div className="space-y-1 bg-surface p-2 rounded border border-border">
+                      <div className="font-bold text-text-muted uppercase text-[9px] mb-1">Current Version</div>
+                      <div><span className="font-semibold">Amount:</span> {formatCurrency(selectedAdvance.amount_requested_ugx)}</div>
+                      <div><span className="font-semibold">Deadline:</span> {selectedAdvance.expected_retirement_date}</div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Outstanding Overdue warning on CFO approve screen */}
               {(() => {
                 const pmOverdues = advances.filter(a => a.requested_by === selectedAdvance.requested_by && a.status === 'overdue');
@@ -793,7 +958,7 @@ export default function AdvancesPage() {
                       <div>
                         <strong className="font-bold text-navy">Accountability Overdue Warning:</strong>
                         <p className="mt-0.5 text-[11px]">
-                          This PM currently has {pmOverdues.length} overdue reports outstanding totalling {formatCurrency(overSum)}. Approving this request will act as a CFO override.
+                          This Coordinator currently has {pmOverdues.length} overdue reports outstanding totalling {formatCurrency(overSum)}. Approving this request will act as a CFO override.
                         </p>
                       </div>
                     </div>
@@ -802,33 +967,74 @@ export default function AdvancesPage() {
                 return null;
               })()}
 
-              <div className="flex flex-col sm:flex-row gap-3 border-t border-border pt-4">
-                <div className="flex-1">
-                  <form onSubmit={handleReject} className="flex gap-2">
-                    <input
-                      type="text"
-                      placeholder="Specify rejection reason..."
-                      required
-                      value={rejectionReason}
-                      onChange={e => setRejectionReason(e.target.value)}
-                      className="flex-1 h-8 px-2.5 text-xs bg-background border border-border rounded text-text focus:outline-none focus:border-primary"
-                    />
-                    <button
-                      type="submit"
-                      className="px-3 h-8 bg-danger hover:bg-danger/90 text-white rounded text-[11px] font-bold transition whitespace-nowrap"
-                    >
-                      Reject
-                    </button>
+              {/* Action Buttons */}
+              <div className="border-t border-border pt-4 space-y-3">
+                {!requestingChanges ? (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleApprove}
+                        className="flex-1 h-9 bg-success hover:bg-success/90 text-white rounded text-xs font-bold transition shadow-sm"
+                      >
+                        Approve Request
+                      </button>
+                      <button
+                        onClick={() => setRequestingChanges(true)}
+                        className="flex-1 h-9 border border-warning text-warning hover:bg-warning/5 rounded text-xs font-bold transition"
+                      >
+                        Request Changes
+                      </button>
+                    </div>
+
+                    <form onSubmit={handleReject} className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="Specify rejection reason..."
+                        required
+                        value={rejectionReason}
+                        onChange={e => setRejectionReason(e.target.value)}
+                        className="flex-1 h-8 px-2.5 text-xs bg-background border border-border rounded text-text focus:outline-none focus:border-primary"
+                      />
+                      <button
+                        type="submit"
+                        className="px-3 h-8 bg-danger hover:bg-danger/90 text-white rounded text-[11px] font-bold transition whitespace-nowrap"
+                      >
+                        Reject
+                      </button>
+                    </form>
+                  </div>
+                ) : (
+                  <form onSubmit={handleRequestChangesSubmit} className="space-y-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-text uppercase tracking-wider mb-1">
+                        Requested Changes Description <span className="text-danger">*</span>
+                      </label>
+                      <textarea
+                        required
+                        rows={2}
+                        value={changesNote}
+                        onChange={e => setChangesNote(e.target.value)}
+                        placeholder="Detail what needs to be changed..."
+                        className="w-full p-2 bg-background border border-border rounded text-xs focus:outline-none focus:border-primary"
+                      />
+                    </div>
+                    <div className="flex gap-2 justify-end">
+                      <button
+                        type="button"
+                        onClick={() => { setRequestingChanges(false); setChangesNote(''); }}
+                        className="h-8 px-3 border border-border text-text hover:bg-background rounded text-xs font-semibold"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        className="h-8 px-4 bg-warning hover:bg-warning/90 text-navy font-bold rounded text-xs"
+                      >
+                        Submit Request
+                      </button>
+                    </div>
                   </form>
-                </div>
-                <div className="flex items-end justify-end">
-                  <button
-                    onClick={handleApprove}
-                    className="px-4 h-8 bg-success hover:bg-success/90 text-white rounded text-[11px] font-bold transition shadow-sm"
-                  >
-                    Approve Request
-                  </button>
-                </div>
+                )}
               </div>
             </div>
           </div>
@@ -1054,6 +1260,76 @@ export default function AdvancesPage() {
                 </div>
               )}
 
+              {/* Changes Requested reviewer note */}
+              {selectedAdvance.status === 'changes_requested' && selectedAdvance.reviewer_note && (
+                <div className="p-3 bg-warning-tint border border-warning/25 text-warning rounded-md text-xs">
+                  <strong className="text-[10px] uppercase text-navy block font-bold tracking-wider">Changes Requested notes:</strong>
+                  <p className="font-medium text-text mt-1">{selectedAdvance.reviewer_note}</p>
+                </div>
+              )}
+
+              {/* PM Endorsement */}
+              {advanceEndorsement && (
+                <div className="p-3 border border-border rounded-md bg-primary/5 text-xs">
+                  <strong className="text-[10px] uppercase text-primary block font-bold tracking-wider">Project Manager Endorsement:</strong>
+                  <p className="italic text-text mt-1">"{advanceEndorsement.note || 'Endorsed without comment.'}"</p>
+                </div>
+              )}
+
+              {/* MD Consultation Advisory Notes */}
+              {currentUser.role === 'md' ? (
+                <form onSubmit={handleSaveMdNote} className="p-3 border rounded-md bg-navy/5 border-border space-y-2 text-xs">
+                  <label className="block text-[10px] font-bold text-navy uppercase tracking-wider">MD Consultation Advisory Notes</label>
+                  <textarea
+                    value={mdNoteVal}
+                    onChange={e => setMdNoteVal(e.target.value)}
+                    placeholder="Enter advisory notes, budget recommendations, or site audit comments..."
+                    rows={3}
+                    className="w-full p-2 bg-background border border-border rounded text-xs focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    disabled={savingMdNote}
+                    className="px-3 py-1.5 bg-primary text-white rounded font-bold hover:bg-primary/95 text-[10px]"
+                  >
+                    {savingMdNote ? 'Saving...' : 'Save Advisory Note'}
+                  </button>
+                </form>
+              ) : (
+                selectedAdvance.md_consultation_note && (
+                  <div className="p-3 border border-border rounded-md bg-navy/5 text-xs">
+                    <strong className="text-[10px] uppercase text-navy block font-bold tracking-wider">MD Consultation Advisory Notes:</strong>
+                    <p className="italic text-text mt-1">"{selectedAdvance.md_consultation_note}"</p>
+                  </div>
+                )
+              )}
+
+              {/* Revision History Comparison */}
+              {parentAdvance && (
+                <div className="border border-border rounded-md overflow-hidden text-xs bg-background/50">
+                  <div className="p-2 bg-background border-b border-border font-bold text-navy uppercase text-[9px]">
+                    Revision History (Revision {selectedAdvance.revision_number || 1})
+                  </div>
+                  <div className="p-3 grid grid-cols-2 gap-3">
+                    <div className="space-y-1 bg-surface p-2 rounded border border-border">
+                      <div className="font-bold text-text-muted uppercase text-[9px] mb-1">Previous Version</div>
+                      <div><span className="font-semibold">Amount:</span> {formatCurrency(parentAdvance.amount_requested_ugx)}</div>
+                      <div><span className="font-semibold">Deadline:</span> {parentAdvance.expected_retirement_date}</div>
+                      {parentAdvance.reviewer_note && (
+                        <div className="mt-1 text-danger text-[9px] bg-danger-tint p-1 rounded border border-danger/10">
+                          <strong>Note:</strong> {parentAdvance.reviewer_note}
+                        </div>
+                      )}
+                    </div>
+                    <div className="space-y-1 bg-surface p-2 rounded border border-border">
+                      <div className="font-bold text-text-muted uppercase text-[9px] mb-1">Current Version</div>
+                      <div><span className="font-semibold">Amount:</span> {formatCurrency(selectedAdvance.amount_requested_ugx)}</div>
+                      <div><span className="font-semibold">Deadline:</span> {selectedAdvance.expected_retirement_date}</div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Items List */}
               <div className="space-y-2">
                 <h4 className="text-xs font-bold text-navy">Itemized Expenses Log</h4>
@@ -1189,6 +1465,58 @@ export default function AdvancesPage() {
                         className="px-4 h-9 bg-primary hover:bg-primary/95 text-white rounded text-xs font-bold shadow-sm transition"
                       >
                         Submit Accounted Entry
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
+              {/* Coordinator Resubmission Revision Form */}
+              {currentUser.role === 'coordinator' && selectedAdvance.status === 'changes_requested' && (
+                <div className="p-4 border border-warning/35 rounded-md bg-warning-tint/30 space-y-3">
+                  <h4 className="text-xs font-bold text-navy flex items-center gap-1.5">
+                    <Plus className="w-4 h-4 text-warning" />
+                    Resubmit Revision for Review
+                  </h4>
+                  <form onSubmit={handleResubmitSubmit} className="space-y-3">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                      <div>
+                        <label className="block text-[10px] font-bold text-text uppercase tracking-wider mb-1">Requested Amount (UGX)</label>
+                        <input
+                          type="number"
+                          required
+                          value={resubmitForm.amount}
+                          onChange={e => setResubmitForm(prev => ({ ...prev, amount: e.target.value }))}
+                          className="w-full h-9 px-3 bg-background border border-border rounded text-xs focus:outline-none focus:border-primary font-bold text-navy"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-text uppercase tracking-wider mb-1">Expected Retirement Date</label>
+                        <input
+                          type="date"
+                          required
+                          value={resubmitForm.expectedRetirementDate}
+                          onChange={e => setResubmitForm(prev => ({ ...prev, expectedRetirementDate: e.target.value }))}
+                          className="w-full h-9 px-3 bg-background border border-border rounded text-xs focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-text uppercase tracking-wider mb-1">Detailed Purpose</label>
+                      <textarea
+                        required
+                        rows={2}
+                        value={resubmitForm.purpose}
+                        onChange={e => setResubmitForm(prev => ({ ...prev, purpose: e.target.value }))}
+                        className="w-full p-2.5 bg-background border border-border rounded text-xs focus:outline-none focus:border-primary"
+                      />
+                    </div>
+                    <div className="flex justify-end">
+                      <button
+                        type="submit"
+                        disabled={resubmitting}
+                        className="px-4 h-9 bg-warning hover:bg-warning/90 text-navy font-bold rounded text-xs shadow-sm transition"
+                      >
+                        {resubmitting ? 'Submitting Revision...' : 'Submit Resubmission Revision'}
                       </button>
                     </div>
                   </form>
